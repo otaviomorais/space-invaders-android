@@ -8,6 +8,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RadialGradient
 import android.graphics.Shader
+import android.util.Log
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -82,6 +83,9 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private var damagePulse = 0f
     private var meteorTimer = 4f
 
+    // Runtime error surfaced on-screen for diagnosis
+    @Volatile private var fatal: Throwable? = null
+
     // Paints
     private val bgPaint = Paint()
     private val nebulae = arrayOf(
@@ -138,13 +142,20 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             lastTime = now
 
             if (surfaceReady && w > 0) {
-                var effDt = dt
-                if (hitStop > 0f) {
-                    hitStop -= dt
-                    effDt = dt * 0.12f
+                try {
+                    var effDt = dt
+                    if (hitStop > 0f) {
+                        hitStop -= dt
+                        effDt = dt * 0.12f
+                    }
+                    update(effDt)
+                    draw()
+                } catch (t: Throwable) {
+                    if (fatal == null) {
+                        fatal = t
+                        Log.e("SpaceInvaders", "Fatal game loop error", t)
+                    }
                 }
-                update(effDt)
-                draw()
             }
         }
     }
@@ -878,6 +889,29 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             return
         }
         try {
+            val err = fatal
+            if (err != null) {
+                // Show the error on screen so it can be reported without adb
+                canvas.drawColor(Color.BLACK)
+                val ep = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = Color.rgb(255, 70, 70)
+                    textSize = 34f * scale
+                }
+                var y = 80f * scale
+                for (line in err.toString().chunked(40)) {
+                    canvas.drawText(line, 30f, y, ep)
+                    y += 44f * scale
+                    if (y > h - 60f) break
+                }
+                ep.color = Color.WHITE
+                for (el in err.stackTrace.take(6)) {
+                    canvas.drawText("${el.className.substringAfterLast('.')}.${el.methodName}:${el.lineNumber}", 30f, y, ep)
+                    y += 38f * scale
+                    if (y > h - 20f) break
+                }
+                return
+            }
+
             canvas.save()
             if (shake > 0.5f) {
                 canvas.translate(
