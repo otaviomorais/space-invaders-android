@@ -86,6 +86,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     // Runtime error surfaced on-screen for diagnosis
     @Volatile private var fatal: Throwable? = null
 
+    // UI-thread -> game-thread requests (avoid mutating lists off-thread)
+    @Volatile private var specialRequested = false
+    @Volatile private var resetRequested = false
+
     // Ship upgrades (per run)
     private var engineUp = 0
     private var cannonUp = 0
@@ -237,44 +241,58 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             lastTime = now
 
             if (surfaceReady && w > 0) {
-                // Cinematic clock runs on raw time
-                if (cineTimer > 0f) cineTimer -= dt
-                if (bossVictoryTimer > 0f) {
-                    bossVictoryTimer -= dt
-                    val b = boss
-                    if (b != null) {
-                        if (Random.nextFloat() < dt * 9f) {
-                            explode(
-                                b.x + (Random.nextFloat() - 0.5f) * 200f * scale,
-                                b.y + (Random.nextFloat() - 0.5f) * 80f * scale,
-                                Color.rgb(255, 150 + Random.nextInt(80), 90),
-                                big = false
-                            )
-                            shake = maxOf(shake, 8f)
-                        }
-                        if (bossVictoryTimer <= 0f) finishBossDeath(b)
-                    }
+                // Consume UI-thread requests safely on the game thread
+                if (resetRequested) {
+                    resetRequested = false
+                    resetGame()
                 }
-                if (specialStrikesLeft > 0 && state == State.PLAYING) {
-                    cineStrikeTimer -= dt
-                    if (cineStrikeTimer <= 0f) {
-                        strikeBeam()
-                        specialStrikesLeft--
-                        cineStrikeTimer = 0.14f
+                if (specialRequested) {
+                    specialRequested = false
+                    if (state == State.PLAYING && specialCharge >= 100f &&
+                        cineTimer <= 0f && bossVictoryTimer <= 0f
+                    ) {
+                        triggerSpecial()
                     }
-                }
-                if (beams.isNotEmpty()) {
-                    beams.removeAll { it.life -= dt; it.life <= 0f }
                 }
 
-                var effDt = dt
-                if (hitStop > 0f) {
-                    hitStop -= dt
-                    effDt = dt * 0.12f
-                } else if (cineTimer > 0f) {
-                    effDt = dt * 0.3f
-                }
                 try {
+                    // Cinematic clock runs on raw time
+                    if (cineTimer > 0f) cineTimer -= dt
+                    if (bossVictoryTimer > 0f) {
+                        bossVictoryTimer -= dt
+                        val b = boss
+                        if (b != null) {
+                            if (Random.nextFloat() < dt * 9f) {
+                                explode(
+                                    b.x + (Random.nextFloat() - 0.5f) * 200f * scale,
+                                    b.y + (Random.nextFloat() - 0.5f) * 80f * scale,
+                                    Color.rgb(255, 150 + Random.nextInt(80), 90),
+                                    big = false
+                                )
+                                shake = maxOf(shake, 8f)
+                            }
+                            if (bossVictoryTimer <= 0f) finishBossDeath(b)
+                        }
+                    }
+                    if (specialStrikesLeft > 0 && state == State.PLAYING) {
+                        cineStrikeTimer -= dt
+                        if (cineStrikeTimer <= 0f) {
+                            strikeBeam()
+                            specialStrikesLeft--
+                            cineStrikeTimer = 0.14f
+                        }
+                    }
+                    if (beams.isNotEmpty()) {
+                        beams.removeAll { it.life -= dt; it.life <= 0f }
+                    }
+
+                    var effDt = dt
+                    if (hitStop > 0f) {
+                        hitStop -= dt
+                        effDt = dt * 0.12f
+                    } else if (cineTimer > 0f) {
+                        effDt = dt * 0.3f
+                    }
                     update(effDt)
                     draw()
                 } catch (t: Throwable) {
@@ -636,14 +654,12 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                 val bx = w - 84f * scale
                 val by = h - 84f * scale
                 if (state == State.PLAYING && hypot(event.x - bx, event.y - by) < 62f * scale) {
-                    if (specialCharge >= 100f && cineTimer <= 0f && bossVictoryTimer <= 0f) {
-                        triggerSpecial()
-                    }
+                    if (specialCharge >= 100f) specialRequested = true
                     return true
                 }
                 dragging = true
                 lastTouchX = event.x
-                if (state == State.GAME_OVER && gameOverTimer > 1.2f) resetGame()
+                if (state == State.GAME_OVER && gameOverTimer > 1.2f) resetRequested = true
             }
             MotionEvent.ACTION_MOVE -> {
                 if (dragging) {
