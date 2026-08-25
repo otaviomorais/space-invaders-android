@@ -20,7 +20,21 @@ java -jar space-invaders-preview.jar
 ```
 (Requer Java 8+. É o mesmo jogo rodando numa janela 1280x720.)
 
+## Releases
+Para gerar um release com APK assinado, crie uma tag:
+```bash
+git tag v1.2.0
+git push origin v1.2.0
+```
+O job `release` compila o APK assinado (keystore efêmero gerado no CI), cria a GitHub Release e anexa o APK automaticamente.
+
 ## CI
-O workflow `.github/workflows/android.yml` gera dois artefatos a cada push em `main`:
-- `space-invaders-debug-apk` — APK para Android
-- `space-invaders-desktop-preview` — JAR executável para testar no PC
+O workflow `.github/workflows/android.yml` gera a cada push:
+- **Artifact** `space-invaders-debug-apk` — APK debug para Android
+- **Artifact** `space-invaders-desktop-preview` — JAR executável para testar no PC
+- **Release** (em tags `v*`) — APK release assinado
+
+## IA (v1.1)
+- Tiros inimigos **mirados** na posição do jogador
+- Inimigos **mergulhadores** abandonam a formação em ataques em S
+- Sobreviventes finais ficam mais agressivos; velocidade e cadência escalam por onda

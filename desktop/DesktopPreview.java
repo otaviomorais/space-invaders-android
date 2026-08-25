@@ -61,6 +61,7 @@ public class DesktopPreview extends JPanel {
     private float formDirX = 1f;
     private boolean entering = false;
     private float invFireTimer = 1.5f;
+    private float diveTimer = 7f;
 
     private Ufo ufo = null;
     private float ufoTimer = 9f;
@@ -142,10 +143,10 @@ public class DesktopPreview extends JPanel {
         Iterator<Bullet> bi = bullets.iterator();
         while (bi.hasNext()) { Bullet b = bi.next(); b.y -= b.speed * dt; b.trail.add(0, b.y); if (b.trail.size() > 6) b.trail.remove(b.trail.size() - 1); if (b.y < -50) bi.remove(); }
         Iterator<Bullet> ei = eBullets.iterator();
-        while (ei.hasNext()) { Bullet b = ei.next(); b.y += b.speed * dt; if (b.y > H + 50) ei.remove(); }
+        while (ei.hasNext()) { Bullet b = ei.next(); b.x += b.vx * dt; b.y += b.speed * dt; if (b.y > H + 50 || b.x < -50 || b.x > W + 50) ei.remove(); }
 
         // Invaders
-        float speed = (55 + wave * 20), descend = (8 + wave * 1.6f);
+        float speed = (60 + wave * 24), descend = (9 + wave * 2.4f);
         if (entering) {
             boolean settled = true;
             for (Inv v : invaders) {
@@ -159,7 +160,7 @@ public class DesktopPreview extends JPanel {
             if (settled) entering = false;
         } else {
             float minX = Float.MAX_VALUE, maxX = -Float.MAX_VALUE, maxHalf = 0;
-            for (Inv v : invaders) { if (!v.alive) continue; v.pulse += dt * 6;
+            for (Inv v : invaders) { if (!v.alive || v.diving) continue; v.pulse += dt * 6;
                 minX = Math.min(minX, v.homeX); maxX = Math.max(maxX, v.homeX); maxHalf = Math.max(maxHalf, v.size); }
             if (minX < maxX) {
                 if (formDirX > 0 && maxX + formOffX + maxHalf > W - 50) formDirX = -1;
@@ -167,7 +168,7 @@ public class DesktopPreview extends JPanel {
                 formOffX += formDirX * speed * dt;
             }
             float maxY = 0;
-            for (Inv v : invaders) { if (!v.alive) continue;
+            for (Inv v : invaders) { if (!v.alive || v.diving) continue;
                 v.x = v.homeX + formOffX; v.homeY += descend * dt; v.y = v.homeY; maxY = Math.max(maxY, v.y); }
             if (maxY > H - 110 - 100) hitPlayer(true);
         }
@@ -188,12 +189,42 @@ public class DesktopPreview extends JPanel {
         invFireTimer -= dt;
         if (invFireTimer <= 0 && !invaders.isEmpty()) {
             List<Inv> alive = new ArrayList<>();
-            for (Inv v : invaders) if (v.alive && v.y > 0) alive.add(v);
+            for (Inv v : invaders) if (v.alive && !v.diving && v.y > 0) alive.add(v);
             if (!alive.isEmpty()) {
                 Inv sh = alive.get(rnd.nextInt(alive.size()));
-                eBullets.add(new Bullet(sh.x, sh.y + sh.size, 420, new Color(255, 90, 60)));
-                invFireTimer = Math.max(rnd.nextFloat() * 0.8f + 1.7f / wave, 0.28f);
-            } else invFireTimer = 0.5f;
+                float bSpeed = Math.min(500 + wave * 18, 900);
+                float travel = (sh.y - (H - 110)) / bSpeed;
+                float vx = travel > 0 ? (playerX - sh.x) / travel * 0.65f : 0;
+                vx = Math.max(-240f, Math.min(240f, vx));
+                eBullets.add(new Bullet(sh.x, sh.y + sh.size, bSpeed, new Color(255, 90, 60), vx));
+                float interval = Math.max(rnd.nextFloat() * 0.7f + 1.5f / wave, 0.22f);
+                int aliveCount = 0;
+                for (Inv v : invaders) if (v.alive) aliveCount++;
+                if (aliveCount <= 3) interval *= 0.55f;
+                invFireTimer = interval;
+            } else invFireTimer = 0.4f;
+        }
+
+        // Divers
+        if (!entering) {
+            diveTimer -= dt;
+            if (diveTimer <= 0) {
+                List<Inv> cands = new ArrayList<>();
+                for (Inv v : invaders) if (v.alive && !v.diving) cands.add(v);
+                if (cands.size() > 2) cands.get(rnd.nextInt(cands.size())).diving = true;
+                diveTimer = Math.max(7 - wave * 0.5f, 2.2f) + rnd.nextFloat() * 2.5f;
+            }
+            float py = H - 110;
+            for (Inv v : invaders) {
+                if (!v.alive || !v.diving) continue;
+                v.pulse += dt * 12;
+                v.divePhase += dt * 5;
+                v.y += (330 + wave * 22) * dt;
+                v.x += (float) Math.sin(v.divePhase) * 170 * dt + Math.signum(playerX - v.x) * 70 * dt;
+                if (dist(v.x, v.y, playerX, py) < v.size + 30) {
+                    explode(v.x, v.y, v.color, 1); v.alive = false; v.diving = false; hitPlayer(false);
+                } else if (v.y > H + v.size * 2) { v.alive = false; v.diving = false; }
+            }
         }
 
         if (!entering) {
@@ -497,10 +528,11 @@ public class DesktopPreview extends JPanel {
         }
     }
 
-    static class Bullet { float x, y, speed; Color color; List<Float> trail = new ArrayList<>();
-        Bullet(float x, float y, float speed, Color color) { this.x = x; this.y = y; this.speed = speed; this.color = color; } }
+    static class Bullet { float x, y, speed, vx; Color color; List<Float> trail = new ArrayList<>();
+        Bullet(float x, float y, float speed, Color color) { this(x, y, speed, color, 0); }
+        Bullet(float x, float y, float speed, Color color, float vx) { this.x = x; this.y = y; this.speed = speed; this.color = color; this.vx = vx; } }
 
-    static class Inv { float homeX, homeY, x, y, size; Color color; int variant, hp; boolean alive = true; float pulse = (float)(Math.random() * 6);
+    static class Inv { float homeX, homeY, x, y, size; Color color; int variant, hp; boolean alive = true, diving = false; float pulse = (float)(Math.random() * 6), divePhase = 0;
         Inv(float hx, float hy, float x, float y, float size, Color color, int variant, int hp)
         { this.homeX = hx; this.homeY = hy; this.x = x; this.y = y; this.size = size; this.color = color; this.variant = variant; this.hp = hp; } }
 
