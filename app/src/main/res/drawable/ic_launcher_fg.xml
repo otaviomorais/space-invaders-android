@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Neon glow aura -->
+    <path android:fillColor="#3300FFC4"
+        android:pathData="M54,26 L32,74 L54,63 L76,74 Z" />
+    <!-- Engine flames -->
+    <path android:fillColor="#FFBE3C"
+        android:pathData="M49,66 L54,80 L59,66 Z" />
+    <path android:fillColor="#FFE08A"
+        android:pathData="M51.5,66 L54,74 L56.5,66 Z" />
+    <!-- Ship hull -->
+    <path android:fillColor="#00FFC4"
+        android:pathData="M54,30 L37,70 L54,61 L71,70 Z" />
+    <!-- Hull shading -->
+    <path android:fillColor="#00B894" android:fillAlpha="0.7"
+        android:pathData="M54,30 L54,61 L71,70 Z" />
+    <!-- Cockpit -->
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M54,44 a4,4 0 1,0 0.01,0 Z" />
+    <!-- Wingtip lights -->
+    <path android:fillColor="#FF4C4C" android:pathData="M36.5,68 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0 Z" />
+    <path android:fillColor="#4CFF6E" android:pathData="M67.5,68 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0 Z" />
+</vector>

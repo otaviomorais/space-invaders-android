@@ -21,7 +21,7 @@ import kotlin.random.Random
 
 class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback, Runnable {
 
-    private enum class State { PLAYING, GAME_OVER }
+    private enum class State { MENU, PLAYING, GAME_OVER }
 
     private var thread: Thread? = null
     @Volatile private var running = false
@@ -33,10 +33,11 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private var scale = 1f
 
     // Game state
-    private var state = State.PLAYING
+    private var state = State.MENU
     private var score = 0
     private var lives = 3
     private var wave = 1
+    private var highScore = 0
     private var shake = 0f
     private var flashAlpha = 0f
     private var gameOverTimer = 0f
@@ -215,6 +216,16 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     init {
         holder.addCallback(this)
         focusable = FOCUSABLE
+        highScore = context.getSharedPreferences("space_invaders", Context.MODE_PRIVATE)
+            .getInt("highscore", 0)
+    }
+
+    private fun saveHighScore() {
+        if (score > highScore) {
+            highScore = score
+            context.getSharedPreferences("space_invaders", Context.MODE_PRIVATE)
+                .edit().putInt("highscore", highScore).apply()
+        }
     }
 
     // ---------- Lifecycle ----------
@@ -650,11 +661,30 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                // Menu: JOGAR button
+                if (state == State.MENU) {
+                    val bw = 340f * scale
+                    val bh = 78f * scale
+                    val left = w / 2f - bw / 2f
+                    val top = h * 0.62f
+                    if (event.x in left..(left + bw) && event.y in top..(top + bh)) {
+                        resetRequested = true
+                    }
+                    return true
+                }
                 // Special attack button (bottom-right)
                 val bx = w - 84f * scale
                 val by = h - 84f * scale
                 if (state == State.PLAYING && hypot(event.x - bx, event.y - by) < 62f * scale) {
                     if (specialCharge >= 100f) specialRequested = true
+                    return true
+                }
+                // Game over: MENU button (bottom-left)
+                if (state == State.GAME_OVER && gameOverTimer > 0.8f &&
+                    event.x < 210f * scale && event.y > h - 80f * scale
+                ) {
+                    saveHighScore()
+                    state = State.MENU
                     return true
                 }
                 dragging = true
@@ -680,6 +710,15 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private fun update(dt: Float) {
         bgTime += dt
         updateStars(dt)
+
+        // Menu: only the cosmos breathes
+        if (state == State.MENU) {
+            updateMeteors(dt)
+            updateDust(dt)
+            updateDebris(dt)
+            updateParticles(dt)
+            return
+        }
 
         if (state == State.GAME_OVER) {
             gameOverTimer += dt
@@ -1294,6 +1333,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             lives = 0
             state = State.GAME_OVER
             gameOverTimer = 0f
+            saveHighScore()
             explode(playerX, playerY, Color.rgb(0, 255, 180), huge = true)
             shake = 28f
         } else {
@@ -1643,6 +1683,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             drawParticlesBelow(canvas)
 
             when (state) {
+                State.MENU -> drawMenu(canvas)
                 State.PLAYING -> {
                     drawUfo(canvas)
                     drawBoss(canvas)
@@ -1657,8 +1698,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             drawParticlesAbove(canvas)
             drawBeams(canvas)
             drawDebris(canvas)
-            drawFloatTexts(canvas)
-            drawHud(canvas)
+            if (state != State.MENU) drawFloatTexts(canvas)
+            if (state != State.MENU) drawHud(canvas)
 
             canvas.restore()
 
@@ -2905,6 +2946,83 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         canvas.drawText(label, x + bw + 12f * scale, y + bh * 0.95f, textPaint)
     }
 
+    private fun drawMenu(canvas: Canvas) {
+        val pulse = 0.5f + sin(bgTime * 3f) * 0.5f
+
+        // Decorative ship hovering above the title
+        val sx = w / 2f
+        val sy = h * 0.16f + sin(bgTime * 2f) * 8f * scale
+        glowPaint.shader = RadialGradient(
+            sx, sy, 90f * scale,
+            Color.argb(110, 0, 255, 190), Color.TRANSPARENT,
+            Shader.TileMode.CLAMP
+        )
+        fillPaint.style = Paint.Style.FILL
+        canvas.drawCircle(sx, sy, 90f * scale, glowPaint)
+        setShadow(Color.rgb(0, 255, 190))
+        fillPaint.color = Color.rgb(0, 255, 190)
+        val ship = Path().apply {
+            moveTo(sx, sy - 34f * scale)
+            lineTo(sx - 26f * scale, sy + 22f * scale)
+            lineTo(sx, sy + 10f * scale)
+            lineTo(sx + 26f * scale, sy + 22f * scale)
+            close()
+        }
+        canvas.drawPath(ship, fillPaint)
+        setShadow(null)
+        fillPaint.color = Color.WHITE
+        canvas.drawCircle(sx, sy - 6f * scale, 5f * scale, fillPaint)
+
+        // Title
+        bigTextPaint.textSize = 92f * scale
+        bigTextPaint.setShadowLayer(26f, 0f, 0f, Color.rgb(255, 90, 200))
+        bigTextPaint.color = Color.WHITE
+        canvas.drawText("SPACE", w / 2f, h * 0.36f, bigTextPaint)
+        bigTextPaint.setShadowLayer(26f, 0f, 0f, Color.rgb(0, 230, 255))
+        bigTextPaint.color = Color.rgb(140, 240, 255)
+        canvas.drawText("INVADERS", w / 2f, h * 0.47f, bigTextPaint)
+
+        // High score
+        textPaint.textAlign = Paint.Align.CENTER
+        textPaint.textSize = 30f * scale
+        textPaint.setShadowLayer(10f, 0f, 0f, Color.rgb(255, 216, 120))
+        textPaint.color = Color.rgb(255, 226, 150)
+        canvas.drawText("RECORDE: $highScore", w / 2f, h * 0.55f, textPaint)
+
+        // JOGAR button
+        val bw = 340f * scale
+        val bh = 78f * scale
+        val left = w / 2f - bw / 2f
+        val top = h * 0.62f
+        setShadow(Color.rgb(0, 255, 190))
+        fillPaint.color = Color.argb(230, 6, 60, 50)
+        canvas.drawRoundRect(left, top, left + bw, top + bh, bh / 2f, bh / 2f, fillPaint)
+        fillPaint.style = Paint.Style.STROKE
+        fillPaint.strokeWidth = 3.5f * scale
+        fillPaint.color = Color.rgb((120 + pulse * 135).toInt(), 255, 200)
+        canvas.drawRoundRect(left, top, left + bw, top + bh, bh / 2f, bh / 2f, fillPaint)
+        fillPaint.style = Paint.Style.FILL
+        setShadow(null)
+        textPaint.textSize = 44f * scale
+        textPaint.setShadowLayer(14f, 0f, 0f, Color.rgb(0, 255, 190))
+        textPaint.color = Color.WHITE
+        canvas.drawText("JOGAR", w / 2f, top + bh * 0.68f, textPaint)
+
+        // Controls hint
+        textPaint.textSize = 20f * scale
+        textPaint.setShadowLayer(6f, 0f, 0f, Color.CYAN)
+        textPaint.color = Color.argb(210, 190, 240, 255)
+        canvas.drawText(
+            "ARRASTE PARA MOVER  •  SEGURE PARA ATIRAR  •  BOTÃO E = ESPECIAL",
+            w / 2f, h * 0.87f, textPaint
+        )
+        textPaint.color = Color.argb(160, 255, 150, 230)
+        textPaint.setShadowLayer(6f, 0f, 0f, Color.MAGENTA)
+        canvas.drawText("SOBREVIVA AOS SETORES. DERRUBE AS NAVES-MÃE.", w / 2f, h * 0.92f, textPaint)
+        textPaint.color = Color.WHITE
+        textPaint.textAlign = Paint.Align.LEFT
+    }
+
     private fun drawGameOver(canvas: Canvas) {
         bigTextPaint.textSize = 96f * scale
         bigTextPaint.setShadowLayer(24f, 0f, 0f, Color.RED)
@@ -2922,6 +3040,20 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         bigTextPaint.color = Color.rgb(255, 230, 120)
         canvas.drawText("TOQUE PARA REINICIAR", w / 2f, h / 2f + 130f * scale, bigTextPaint)
         bigTextPaint.alpha = 255
+
+        // MENU button (bottom-left)
+        if (gameOverTimer > 0.8f) {
+            fillPaint.style = Paint.Style.FILL
+            setShadow(null)
+            fillPaint.color = Color.argb(190, 30, 30, 60)
+            canvas.drawRoundRect(30f, h - 74f * scale, 190f * scale, h - 26f * scale, 20f * scale, 20f * scale, fillPaint)
+            textPaint.textAlign = Paint.Align.CENTER
+            textPaint.textSize = 24f * scale
+            textPaint.setShadowLayer(6f, 0f, 0f, Color.CYAN)
+            textPaint.color = Color.WHITE
+            canvas.drawText("MENU", 110f * scale, h - 42f * scale, textPaint)
+            textPaint.textAlign = Paint.Align.LEFT
+        }
     }
 
     private fun setShadow(color: Int?) {
