@@ -100,6 +100,73 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private var ambG = 0f
     private var ambB = 0f
 
+    // Campaign: sectors, boss, weapons, armor, missions, combo
+    private var sectorBannerTimer = 0f
+    private var damageTakenThisWave = false
+    private var weapon = Weapon.PLASMA
+    private var armor = 0
+    private var combo = 0
+    private var comboTimer = 0f
+    private var boss: Boss? = null
+    private var bossWave = false
+    private var mission: Mission? = null
+    private var missionCooldown = 0
+
+    private enum class Weapon { PLASMA, SPREAD, LASER, MISSILE }
+
+    private class SectorDef(val name: String, val top: Int, val mid: Int, val bot: Int, val neb: IntArray, val accent: Int)
+
+    private val sectors = arrayOf(
+        SectorDef(
+            "SETOR NEBULOSA", Color.rgb(3, 2, 12), Color.rgb(16, 7, 38), Color.rgb(30, 9, 48),
+            intArrayOf(
+                Color.argb(60, 90, 30, 190), Color.argb(55, 20, 140, 165), Color.argb(50, 190, 30, 110),
+                Color.argb(45, 40, 60, 210), Color.argb(42, 120, 80, 255)
+            ),
+            Color.rgb(255, 90, 200)
+        ),
+        SectorDef(
+            "SETOR GLACIAL", Color.rgb(2, 6, 16), Color.rgb(8, 20, 44), Color.rgb(14, 36, 68),
+            intArrayOf(
+                Color.argb(60, 40, 140, 200), Color.argb(55, 80, 200, 230), Color.argb(50, 150, 230, 255),
+                Color.argb(45, 60, 100, 220), Color.argb(42, 180, 240, 255)
+            ),
+            Color.rgb(120, 230, 255)
+        ),
+        SectorDef(
+            "SETOR VULCANICO", Color.rgb(10, 3, 4), Color.rgb(32, 10, 8), Color.rgb(56, 18, 8),
+            intArrayOf(
+                Color.argb(60, 200, 60, 20), Color.argb(55, 230, 110, 30), Color.argb(50, 255, 160, 40),
+                Color.argb(45, 160, 40, 20), Color.argb(42, 255, 90, 60)
+            ),
+            Color.rgb(255, 130, 60)
+        ),
+        SectorDef(
+            "O VAZIO", Color.rgb(2, 2, 6), Color.rgb(6, 4, 14), Color.rgb(10, 6, 22),
+            intArrayOf(
+                Color.argb(40, 70, 40, 130), Color.argb(38, 50, 30, 150), Color.argb(36, 90, 60, 170),
+                Color.argb(34, 40, 40, 140), Color.argb(32, 120, 80, 200)
+            ),
+            Color.rgb(200, 160, 255)
+        )
+    )
+
+    private class Boss(
+        var x: Float,
+        var y: Float,
+        val maxHp: Int,
+        var hp: Int,
+        var phase: Int = 0,
+        var timer: Float = 1.6f,
+        var cycle: Float = 6.5f,
+        var vx: Float = 1f,
+        var spiral: Float = 0f,
+        var pulse: Float = 0f,
+        var entering: Boolean = true
+    )
+
+    private class Mission(val text: String, val target: Int, val kind: Int, var progress: Int = 0)
+
     // Paints
     private val bgPaint = Paint()
     private val nebulae = arrayOf(
@@ -344,9 +411,34 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     }
 
     private fun invaderColor(variant: Int): Int = when (variant) {
-        0 -> Color.rgb(235, 70, 160)   // crab - magenta
-        1 -> Color.rgb(70, 215, 250)   // squid - cyan
-        else -> Color.rgb(120, 230, 95) // armored - green
+        0 -> Color.rgb(235, 70, 160)    // crab - magenta
+        1 -> Color.rgb(70, 215, 250)    // squid - cyan
+        2 -> Color.rgb(120, 230, 95)    // armored - green
+        3 -> Color.rgb(255, 150, 50)    // hunter - orange
+        4 -> Color.rgb(235, 80, 60)     // bomber - red
+        else -> Color.rgb(170, 255, 90) // splitter - lime
+    }
+
+    private fun setSector(index: Int) {
+        val s = sectors[index.coerceIn(0, sectors.lastIndex)]
+        bgPaint.shader = LinearGradient(
+            0f, 0f, 0f, h,
+            intArrayOf(s.top, s.mid, s.bot),
+            floatArrayOf(0f, 0.55f, 1f),
+            Shader.TileMode.CLAMP
+        )
+        val spots = arrayOf(
+            Triple(0.16f, 0.26f), Triple(0.80f, 0.18f), Triple(0.55f, 0.88f),
+            Triple(0.32f, 0.62f), Triple(0.90f, 0.68f)
+        )
+        for (i in nebulae.indices) {
+            val (fx, fy) = spots[i]
+            nebulae[i].shader = RadialGradient(
+                w * fx, h * fy, minDim * 0.52f,
+                s.neb[i], Color.TRANSPARENT,
+                Shader.TileMode.CLAMP
+            )
+        }
     }
 
     /** Multiply RGB channels by factor f (>1 lightens, <1 darkens). */
@@ -363,6 +455,43 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         formDirX = 1f
         entering = true
         diveTimer = 7f
+        damageTakenThisWave = false
+
+        // Sector changes every 3 waves
+        val sectorIndex = ((wave - 1) / 3).coerceAtMost(sectors.lastIndex)
+        if (bgW != 0f) setSector(sectorIndex)
+        sectorBannerTimer = 2f
+        flashAlpha = maxOf(flashAlpha, 0.2f)
+
+        // Every 4th wave: MOTHERSHIP BOSS
+        if (wave % 4 == 0) {
+            bossWave = true
+            entering = false
+            boss = Boss(
+                x = w / 2f, y = -180f * scale,
+                maxHp = 55 + sectorIndex * 25 + wave * 3
+            ).also { it.hp = it.maxHp }
+            addFloat("ALERTA: NAVE-MAE!", w / 2f, h * 0.35f, Color.rgb(255, 80, 120))
+            shake = maxOf(shake, 10f)
+            return
+        }
+        bossWave = false
+
+        // Mission assignment
+        if (mission == null) {
+            if (missionCooldown > 0) {
+                missionCooldown--
+            } else if (Random.nextFloat() < 0.75f) {
+                val kinds = listOf(0, 1, 2, 3)
+                mission = when (kinds.random()) {
+                    0 -> Mission("Destrua ${8 + wave} inimigos", 8 + wave, 0)
+                    1 -> Mission("Colete 2 power-ups", 2, 1)
+                    2 -> Mission("Abata 3 mergulhadores", 3, 2)
+                    else -> Mission("Onda perfeita: sem dano", 1, 3)
+                }
+                addFloat("NOVA MISSAO!", w / 2f, h * 0.3f, Color.rgb(255, 216, 120))
+            }
+        }
 
         val cols = min(5 + wave / 2, 9)
         val rows = min(3 + (wave - 1) / 2, 5)
@@ -371,10 +500,17 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
         for (r in 0 until rows) {
             for (c in 0 until cols) {
-                val variant = r % 3
+                var variant = r % 3
+                val roll = Random.nextFloat()
+                if (wave >= 2 && roll < 0.14f) variant = 3
+                else if (wave >= 3 && roll < 0.24f) variant = 4
+                else if (wave >= 4 && roll < 0.34f) variant = 5
                 val size = (when (variant) {
                     0 -> 40f
                     1 -> 36f
+                    3 -> 34f
+                    4 -> 52f
+                    5 -> 34f
                     else -> 46f
                 }) * scale
                 invaders.add(
@@ -386,7 +522,11 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                         size = size,
                         color = invaderColor(variant),
                         variant = variant,
-                        hp = if (variant == 2 || (r == 0 && wave >= 4)) 2 else 1
+                        hp = when (variant) {
+                            2 -> 2
+                            4 -> 3
+                            else -> if (r == 0 && wave >= 4) 2 else 1
+                        }
                     )
                 )
             }
@@ -421,6 +561,15 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         ambR = 0f
         ambG = 0f
         ambB = 0f
+        weapon = Weapon.PLASMA
+        armor = 0
+        combo = 0
+        comboTimer = 0f
+        boss = null
+        bossWave = false
+        mission = null
+        missionCooldown = 0
+        sectorBannerTimer = 0f
         initDebris()
         spawnWave()
     }
@@ -475,6 +624,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
         updateBullets(dt)
         updateInvaders(dt)
+        updateBoss(dt)
         updateUfo(dt)
         updateParticles(dt)
         updatePowerUps(dt)
@@ -485,7 +635,12 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
         rapidTimer -= dt
         tripleTimer -= dt
+        sectorBannerTimer -= dt
         damagePulse = (damagePulse - dt * 2f).coerceAtLeast(0f)
+
+        // Battle combo decay
+        comboTimer -= dt
+        if (comboTimer <= 0f) combo = 0
 
         // Depth camera: world pans slightly against the player
         camX += ((playerX - w / 2f) - camX) * min(4f * dt, 1f)
@@ -509,8 +664,20 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         if (invaderFireTimer <= 0f && invaders.isNotEmpty()) {
             val alive = invaders.filter { it.alive && !it.diving && it.y > 0f }
             if (alive.isNotEmpty()) {
-                val shooter = alive.random()
-                fireAimed(shooter)
+                val bombers = alive.filter { it.variant == 4 }
+                val shooter = if (bombers.isNotEmpty() && Random.nextFloat() < 0.45f) bombers.random() else alive.random()
+                if (shooter.variant == 4) {
+                    // Bomber drops a 3-shot cluster fan
+                    val speed = (380f + wave * 14f) * scale
+                    for (a in floatArrayOf(-0.3f, 0f, 0.3f)) {
+                        enemyBullets.add(
+                            Bullet(shooter.x, shooter.y + shooter.size, speed,
+                                Color.rgb(255, 140, 60), sin(a) * speed)
+                        )
+                    }
+                } else {
+                    fireAimed(shooter)
+                }
                 var interval = (Random.nextFloat() * 0.7f + 1.5f / wave).coerceAtLeast(0.22f)
                 val aliveCount = invaders.count { it.alive }
                 if (aliveCount <= 3) interval *= 0.55f // desperate survivors shoot much faster
@@ -521,7 +688,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         }
 
         // ---- Divers ----
-        if (!entering) {
+        if (!entering && boss == null) {
             diveTimer -= dt
             if (diveTimer <= 0f) {
                 val candidates = invaders.filter { it.alive && !it.diving }
@@ -532,8 +699,11 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             }
         }
 
-        // Wave cleared
-        if (!entering && invaders.none { it.alive }) {
+        // Wave cleared (boss must fall too)
+        if (!entering && boss == null && !bossWave && invaders.none { it.alive }) {
+            // Perfect wave mission
+            val m = mission
+            if (m != null && m.kind == 3 && !damageTakenThisWave) missionProgress(3, 1)
             wave++
             addScore(100)
             spawnWave()
@@ -602,6 +772,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                 inv.x = inv.homeX + formOffX
                 inv.homeY += descendRate * dt
                 inv.y = inv.homeY
+                // Hunters strafe inside the formation
+                if (inv.variant == 3) inv.x += sin(inv.pulse * 1.3f) * 42f * scale
                 maxY = maxOf(maxY, inv.y)
             }
 
@@ -635,8 +807,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         }
     }
 
-    private fun updateUfo(dt: Float) {
-        val current = ufo
+    private fun updateUfo(dt: Float) {        val current = ufo
         if (current != null) {
             current.x += current.vx * dt
             current.blink += dt * 8f
@@ -655,17 +826,162 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         }
     }
 
+    // ---------- Boss: Mothership ----------
+
+    private fun updateBoss(dt: Float) {
+        val b = boss ?: return
+        b.pulse += dt * 4f
+        if (b.entering) {
+            b.y += (h * 0.18f - b.y) * min(2f * dt, 1f)
+            if (abs(b.y - h * 0.18f) < 8f * scale) b.entering = false
+            return
+        }
+
+        val enraged = b.hp <= b.maxHp / 3
+        val speedMul = if (enraged) 1.6f else 1f
+        b.timer -= dt * speedMul
+        b.cycle -= dt
+
+        when (b.phase) {
+            0 -> { // Sweep + aimed volleys
+                b.x += b.vx * (120f + wave * 6f) * scale * dt * speedMul
+                if (b.x < 160f * scale) { b.x = 160f * scale; b.vx = 1f }
+                if (b.x > w - 160f * scale) { b.x = w - 160f * scale; b.vx = -1f }
+                if (b.timer <= 0f) {
+                    fireBossVolley(b)
+                    b.timer = 1.3f
+                }
+            }
+            1 -> { // Rotating spiral barrage
+                b.spiral += dt * 2.6f * speedMul
+                if (b.timer <= 0f) {
+                    fireBossSpiral(b)
+                    b.timer = 0.32f
+                }
+            }
+            else -> { // Summon minions
+                if (b.timer <= 0f) {
+                    summonMinions(b)
+                    b.phase = 0
+                    b.timer = 1.6f
+                }
+            }
+        }
+
+        if (b.cycle <= 0f) {
+            b.phase = (b.phase + 1) % 3
+            b.timer = if (b.phase == 2) 0.6f else 1.2f
+            b.cycle = 6.5f
+        }
+    }
+
+    private fun fireBossVolley(b: Boss) {
+        val speed = (430f + wave * 12f) * scale
+        for (a in floatArrayOf(-0.28f, 0f, 0.28f)) {
+            enemyBullets.add(
+                Bullet(b.x + a * 160f * scale, b.y + 80f * scale, speed,
+                    Color.rgb(255, 70, 170), sin(a) * speed * 0.8f)
+            )
+        }
+    }
+
+    private fun fireBossSpiral(b: Boss) {
+        val speed = 300f * scale
+        for (i in 0 until 6) {
+            val angle = b.spiral + i * (Math.PI.toFloat() / 3f)
+            enemyBullets.add(
+                Bullet(b.x, b.y + 40f * scale, abs(sin(angle)) * speed + 60f * scale,
+                    Color.rgb(255, 120, 220), cos(angle) * speed)
+            )
+        }
+    }
+
+    private fun summonMinions(b: Boss) {
+        repeat(4) { i ->
+            val variant = if (i % 2 == 0) 0 else 1
+            invaders.add(
+                Invader(
+                    homeX = b.x + (i - 1.5f) * 90f * scale, homeY = b.y + 120f * scale,
+                    x = b.x + (i - 1.5f) * 90f * scale, y = b.y,
+                    size = 30f * scale, color = invaderColor(variant), variant = variant, hp = 1
+                )
+            )
+        }
+        addFloat("REFUERÇOS!", b.x, b.y + 140f * scale, Color.rgb(255, 120, 220))
+    }
+
+    private fun bossDeath(b: Boss) {
+        boss = null
+        bossWave = false
+        repeat(3) { i ->
+            explode(b.x + (i - 1) * 70f * scale, b.y + (i - 1) * 30f * scale, Color.rgb(255, 120, 220), huge = true)
+        }
+        addScore(1000)
+        addFloat("NAVE-MAE DESTRUIDA! +1000", b.x, b.y, Color.rgb(255, 230, 120))
+        // Loot shower
+        powerUps.add(PowerUp(b.x - 60f * scale, b.y, PowerType.WEAPON))
+        powerUps.add(PowerUp(b.x, b.y - 30f * scale, PowerType.PART))
+        powerUps.add(PowerUp(b.x + 60f * scale, b.y, PowerType.LIFE))
+        screenPunch = 1.6f
+        flashAlpha = 0.5f
+        shake = 26f
+        hitStop = 0.22f
+    }
+
+    // ---------- Missions ----------
+
+    private fun missionProgress(kind: Int, amount: Int) {
+        val m = mission ?: return
+        if (m.kind != kind || m.progress >= m.target) return
+        m.progress += amount
+        if (m.progress >= m.target) {
+            addScore(300)
+            addFloat("MISSAO CUMPRIDA! +300", w / 2f, h * 0.3f, Color.rgb(120, 255, 160))
+            powerUps.add(PowerUp(w * 0.35f, h * 0.4f, PowerType.WEAPON))
+            powerUps.add(PowerUp(w * 0.65f, h * 0.4f, PowerType.PART))
+            mission = null
+            missionCooldown = 1
+        }
+    }
+
+    private fun nearestTargetX(x: Float, y: Float): Float? {
+        var best: Float? = null
+        var bestD = Float.MAX_VALUE
+        for (inv in invaders) {
+            if (!inv.alive) continue
+            val d = hypot(inv.x - x, inv.y - y)
+            if (d < bestD) { bestD = d; best = inv.x }
+        }
+        val b = boss
+        if (b != null) {
+            val d = hypot(b.x - x, b.y - y)
+            if (d < bestD) best = b.x
+        }
+        return best
+    }
+
     private fun updateBullets(dt: Float) {
         bullets.removeAll { b ->
+            if (b.homing) {
+                val tx = nearestTargetX(b.x, b.y)
+                if (tx != null) {
+                    val desired = ((tx - b.x) * 2.2f).coerceIn(-320f * scale, 320f * scale)
+                    b.vx += (desired - b.vx) * min(6f * dt, 1f)
+                }
+                if (Random.nextFloat() < dt * 28f) {
+                    spawnSparks(b.x, b.y + 8f * scale, Color.rgb(200, 200, 200), count = 1, small = true, spreadUp = true)
+                }
+            }
+            b.x += b.vx * dt
             b.y -= b.speed * dt
             b.trail.add(0, b.y)
             if (b.trail.size > 6) b.trail.removeAt(b.trail.size - 1)
-            b.y < -50f
+            b.y < -60f
         }
         enemyBullets.removeAll { b ->
             b.x += b.vx * dt
             b.y += b.speed * dt
-            b.y > h + 50f || b.x < -50f || b.x > w + 50f
+            b.y > h + 50f || b.y < -90f || b.x < -50f || b.x > w + 50f
         }
     }
 
@@ -682,31 +998,80 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         }
     }
 
+    /** Applies damage; handles death, combo, drops, splitter spawn, missions. */
+    private fun damageInvader(inv: Invader, amount: Int) {
+        inv.hp -= amount
+        if (inv.hp > 0) {
+            addScore(5)
+            spawnSparks(inv.x, inv.y, inv.color, count = 6, small = true)
+            return
+        }
+        inv.alive = false
+        explode(inv.x, inv.y, inv.color, big = true)
+        combo++
+        comboTimer = 2f
+        val base = when (inv.variant) {
+            2 -> 40; 3 -> 35; 4 -> 60; 5 -> 25; 0 -> 30; else -> 20
+        }
+        val mult = 1 + combo / 5
+        addScore(base * mult)
+        if (combo >= 3) addFloat("COMBO x$mult", inv.x, inv.y - inv.size * 2f, Color.rgb(255, 230, 120))
+        missionProgress(0, 1)
+        if (inv.diving) missionProgress(2, 1)
+        shake = maxOf(shake, 6f)
+        hitStop = maxOf(hitStop, 0.05f)
+        // Splitter divides into two mini divers
+        if (inv.variant == 5 && !inv.mini) {
+            repeat(2) { i ->
+                val mini = Invader(
+                    homeX = inv.x + (i * 60 - 30) * scale, homeY = inv.y,
+                    x = inv.x + (i * 60 - 30) * scale, y = inv.y,
+                    size = 22f * scale, color = invaderColor(1), variant = 1, hp = 1, mini = true
+                )
+                mini.diving = true
+                invaders.add(mini)
+            }
+        }
+        if (Random.nextFloat() < 0.14f) {
+            powerUps.add(PowerUp(inv.x, inv.y, rollPowerType()))
+        }
+    }
+
     private fun checkCollisions() {
-        // Player bullets vs invaders / UFO
+        // Player bullets vs invaders / boss / UFO
         bullets.removeAll { b ->
             var consumed = false
+            var hits = 0
             for (inv in invaders) {
                 if (!inv.alive) continue
                 if (hypot(inv.x - b.x, inv.y - b.y) < inv.size * 1.1f) {
-                    inv.hp--
-                    consumed = true
-                    spawnSparks(b.x, b.y, inv.color, count = 8, small = true)
-                    if (inv.hp <= 0) {
-                        inv.alive = false
-                        explode(inv.x, inv.y, inv.color, big = true)
-                        addScore(if (inv.variant == 2) 40 else if (inv.variant == 0) 30 else 20)
-                        shake = maxOf(shake, 6f)
-                        hitStop = maxOf(hitStop, 0.05f)
-                        if (Random.nextFloat() < 0.14f) {
-                            powerUps.add(PowerUp(inv.x, inv.y, rollPowerType()))
+                    damageInvader(inv, 1)
+                    hits++
+                    spawnSparks(b.x, b.y, inv.color, count = 6, small = true)
+                    if (b.splash) {
+                        for (other in invaders.toList()) {
+                            if (other.alive && other !== inv && hypot(other.x - b.x, other.y - b.y) < 85f * scale) {
+                                damageInvader(other, 1)
+                            }
                         }
-                    } else {
-                        addScore(5)
+                        explode(b.x, b.y, Color.rgb(255, 170, 90), big = false)
                     }
-                    break
+                    if (!b.pierce || hits >= 3) { consumed = true; break }
                 }
             }
+            // Boss
+            if (!consumed) {
+                val bs = boss
+                if (bs != null && !bs.entering && hypot(bs.x - b.x, bs.y - b.y) < 100f * scale) {
+                    bs.hp--
+                    consumed = true
+                    spawnSparks(b.x, b.y, Color.rgb(255, 120, 220), count = 8, small = true)
+                    addScore(5)
+                    if (b.splash) explode(b.x, b.y, Color.rgb(255, 170, 90), big = false)
+                    if (bs.hp <= 0) bossDeath(bs)
+                }
+            }
+            // UFO
             if (!consumed) {
                 val saucer = ufo
                 if (saucer != null && hypot(saucer.x - b.x, saucer.y - b.y) < 70 * scale) {
@@ -714,6 +1079,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                     consumed = true
                     explode(saucer.x, saucer.y, Color.rgb(255, 220, 90), huge = true)
                     addScore(150)
+                    missionProgress(4, 1)
                     shake = maxOf(shake, 12f)
                     screenPunch = maxOf(screenPunch, 0.8f)
                 }
@@ -736,6 +1102,21 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private fun hitPlayer(instantDeath: Boolean) {
         if (state != State.PLAYING || invincible > 0f) return
 
+        // Armor plates absorb hits before anything else
+        if (armor > 0 && !instantDeath) {
+            armor--
+            invincible = 1f
+            explode(playerX, playerY - playerW * 0.3f, Color.rgb(150, 170, 225), big = false)
+            particles.add(
+                Particle(playerX, playerY - playerW * 0.3f, 0f, 0f, 14f * scale, 0.4f, 0.4f,
+                    Color.rgb(150, 170, 225), 0f).apply { isRing = true }
+            )
+            addFloat("BLINDAGEM ABSORVEU", playerX, playerY - 80 * scale, Color.rgb(150, 170, 225))
+            shake = maxOf(shake, 8f)
+            damageTakenThisWave = true
+            return
+        }
+
         // Shield absorbs one non-lethal hit
         if (shieldUp && !instantDeath) {
             shieldUp = false
@@ -756,6 +1137,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         damagePulse = 1f
         screenPunch = 1f
         hitStop = maxOf(hitStop, 0.14f)
+        damageTakenThisWave = true
         lives--
         if (lives <= 0 || instantDeath) {
             lives = 0
@@ -772,25 +1154,53 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
     private fun shoot() {
         val rapid = rapidTimer > 0f
-        fireCooldown = (if (rapid) 0.07f else 0.18f) - cannonUp * 0.03f
         val spd = 1150f * scale
-        // Wing upgrades add permanent spread cannons; TRIPLE power-up stacks on top
-        val extra = when {
+        val wingExtra = when {
             tripleTimer > 0f -> 2
             wingUp >= 2 -> 2
             wingUp == 1 -> 1
             else -> 0
         }
-        val angles = when (extra) {
-            2 -> floatArrayOf(-0.22f, 0f, 0.22f)
-            1 -> floatArrayOf(-0.13f, 0.13f)
-            else -> floatArrayOf(0f)
-        }
-        for (a in angles) {
-            bullets.add(
-                Bullet(playerX, playerY - playerW, spd * cos(a).coerceAtLeast(0.7f),
-                    Color.rgb(120, 255, 200), sin(a) * spd)
-            )
+        when (weapon) {
+            Weapon.PLASMA -> {
+                fireCooldown = (if (rapid) 0.07f else 0.18f) - cannonUp * 0.03f
+                val angles = when (wingExtra) {
+                    2 -> floatArrayOf(-0.22f, 0f, 0.22f)
+                    1 -> floatArrayOf(-0.13f, 0.13f)
+                    else -> floatArrayOf(0f)
+                }
+                for (a in angles) {
+                    bullets.add(Bullet(playerX, playerY - playerW, spd * cos(a).coerceAtLeast(0.7f),
+                        Color.rgb(120, 255, 200), sin(a) * spd))
+                }
+            }
+            Weapon.SPREAD -> {
+                fireCooldown = (if (rapid) 0.16f else 0.26f) - cannonUp * 0.02f
+                for (a in floatArrayOf(-0.5f, -0.25f, 0f, 0.25f, 0.5f)) {
+                    bullets.add(Bullet(playerX, playerY - playerW, spd * 0.95f * cos(a).coerceAtLeast(0.55f),
+                        Color.rgb(255, 230, 130), sin(a) * spd))
+                }
+            }
+            Weapon.LASER -> {
+                fireCooldown = (if (rapid) 0.2f else 0.3f) - cannonUp * 0.02f
+                bullets.add(Bullet(playerX, playerY - playerW, 1650f * scale,
+                    Color.rgb(200, 240, 255), 0f, pierce = true))
+                if (wingExtra >= 1) {
+                    bullets.add(Bullet(playerX - playerW * 0.5f, playerY - playerW, spd,
+                        Color.rgb(120, 255, 200), -0.15f * spd))
+                    bullets.add(Bullet(playerX + playerW * 0.5f, playerY - playerW, spd,
+                        Color.rgb(120, 255, 200), 0.15f * spd))
+                }
+            }
+            Weapon.MISSILE -> {
+                fireCooldown = (if (rapid) 0.22f else 0.34f) - cannonUp * 0.02f
+                val n = 1 + wingExtra
+                for (i in 0 until n) {
+                    val off = (i - (n - 1) / 2f) * playerW * 0.5f
+                    bullets.add(Bullet(playerX + off, playerY - playerW, 720f * scale,
+                        Color.rgb(255, 170, 90), off * 1.2f, homing = true, splash = true))
+                }
+            }
         }
         spawnSparks(playerX, playerY - playerW, Color.rgb(120, 255, 200), count = 4, small = true, spreadUp = true)
     }
@@ -800,12 +1210,14 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private fun rollPowerType(): PowerType {
         val r = Random.nextFloat()
         return when {
-            r < 0.26f -> PowerType.RAPID
-            r < 0.50f -> PowerType.TRIPLE
-            r < 0.68f -> PowerType.SHIELD
-            r < 0.78f -> PowerType.LIFE
-            r < 0.90f -> PowerType.NOVA
-            else -> PowerType.PART
+            r < 0.20f -> PowerType.RAPID
+            r < 0.38f -> PowerType.TRIPLE
+            r < 0.52f -> PowerType.SHIELD
+            r < 0.62f -> PowerType.LIFE
+            r < 0.72f -> PowerType.NOVA
+            r < 0.82f -> PowerType.PART
+            r < 0.91f -> PowerType.WEAPON
+            else -> PowerType.ARMOR
         }
     }
 
@@ -816,6 +1228,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         PowerType.LIFE -> Color.rgb(255, 111, 165)
         PowerType.NOVA -> Color.rgb(199, 125, 255)
         PowerType.PART -> Color.rgb(255, 216, 120)
+        PowerType.WEAPON -> Color.rgb(170, 255, 245)
+        PowerType.ARMOR -> Color.rgb(150, 170, 225)
     }
 
     private fun updatePowerUps(dt: Float) {
@@ -829,6 +1243,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             // Pickup?
             if (hypot(playerX - p.x, playerY - p.y) < playerW * 0.95f) {
                 applyPowerUp(p.type)
+                missionProgress(1, 1)
                 spawnSparks(p.x, p.y, powerColor(p.type), count = 18, small = false)
                 return@removeAll true
             }
@@ -857,6 +1272,20 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             }
             PowerType.NOVA -> applyNova()
             PowerType.PART -> applyRandomUpgrade()
+            PowerType.WEAPON -> {
+                weapon = Weapon.entries[(weapon.ordinal + 1) % Weapon.entries.size]
+                val wName = when (weapon) {
+                    Weapon.PLASMA -> "PLASMA"
+                    Weapon.SPREAD -> "SPREAD"
+                    Weapon.LASER -> "LASER"
+                    Weapon.MISSILE -> "MISSIL"
+                }
+                addFloat("ARMA: $wName", playerX, playerY - 80 * scale, powerColor(PowerType.WEAPON))
+            }
+            PowerType.ARMOR -> {
+                armor = (armor + 2).coerceAtMost(4)
+                addFloat("BLINDAGEM +$armor", playerX, playerY - 80 * scale, powerColor(PowerType.ARMOR))
+            }
         }
         shake = maxOf(shake, 5f)
     }
@@ -887,18 +1316,16 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     /** Shockwave that damages every enemy on screen and clears hostile fire. */
     private fun applyNova() {
         for (inv in invaders.toList()) {
-            if (!inv.alive) continue
-            inv.hp--
-            if (inv.hp <= 0) {
-                inv.alive = false
-                explode(inv.x, inv.y, inv.color, big = true)
-                addScore(if (inv.variant == 2) 40 else if (inv.variant == 0) 30 else 20)
-            } else {
-                spawnSparks(inv.x, inv.y, inv.color, count = 6, small = true)
-            }
+            if (inv.alive) damageInvader(inv, 2)
         }
         for (b in enemyBullets) spawnSparks(b.x, b.y, Color.rgb(255, 150, 60), count = 2, small = true)
         enemyBullets.clear()
+        val bs = boss
+        if (bs != null) {
+            bs.hp -= 6
+            spawnSparks(bs.x, bs.y, Color.rgb(199, 125, 255), count = 20, small = false)
+            if (bs.hp <= 0) bossDeath(bs)
+        }
         val cx = w / 2f
         val cy = h / 2f
         particles.add(Particle(cx, cy, 0f, 0f, 30f * scale, 0.6f, 0.6f, Color.rgb(199, 125, 255), 0f).apply { isRing = true })
@@ -1056,6 +1483,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             when (state) {
                 State.PLAYING -> {
                     drawUfo(canvas)
+                    drawBoss(canvas)
                     drawInvaders(canvas)
                     drawPowerUps(canvas)
                     drawPlayer(canvas)
@@ -1371,11 +1799,84 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             when (inv.variant) {
                 0 -> drawCrab(canvas, inv)
                 1 -> drawSquid(canvas, inv)
-                else -> drawArmored(canvas, inv)
-        }
+                2 -> drawArmored(canvas, inv)
+                3 -> drawHunter(canvas, inv)
+                4 -> drawBomber(canvas, inv)
+                else -> drawSquid(canvas, inv)
+            }
         }
         setShadow(null)
         fillPaint.shader = null
+    }
+
+    private fun drawHunter(canvas: Canvas, inv: Invader) {
+        val s = inv.size
+        drawShadowCircle(canvas, inv.x, inv.y, s * 0.7f)
+        fillPaint.style = Paint.Style.FILL
+        fillPaint.shader = LinearGradient(
+            inv.x, inv.y - s, inv.x, inv.y + s,
+            intArrayOf(shade(inv.color, 1.6f), inv.color, shade(inv.color, 0.4f)),
+            floatArrayOf(0f, 0.5f, 1f),
+            Shader.TileMode.CLAMP
+        )
+        setShadow(inv.color)
+        // Dart-shaped attack craft pointing down
+        val dart = Path().apply {
+            moveTo(inv.x, inv.y + s * 0.95f)
+            lineTo(inv.x - s * 0.85f, inv.y - s * 0.45f)
+            lineTo(inv.x - s * 0.3f, inv.y - s * 0.55f)
+            lineTo(inv.x, inv.y - s * 0.2f)
+            lineTo(inv.x + s * 0.3f, inv.y - s * 0.55f)
+            lineTo(inv.x + s * 0.85f, inv.y - s * 0.45f)
+            close()
+        }
+        canvas.drawPath(dart, fillPaint)
+        fillPaint.shader = null
+        setShadow(null)
+        // Menacing eye slit
+        fillPaint.color = Color.BLACK
+        canvas.drawRoundRect(
+            inv.x - s * 0.4f, inv.y - s * 0.15f,
+            inv.x + s * 0.4f, inv.y + s * 0.05f,
+            s * 0.1f, s * 0.1f, fillPaint
+        )
+        fillPaint.color = Color.rgb(255, 240, 150)
+        canvas.drawRoundRect(
+            inv.x - s * 0.3f, inv.y - s * 0.1f,
+            inv.x + s * 0.3f, inv.y - s * 0.02f,
+            s * 0.06f, s * 0.06f, fillPaint
+        )
+    }
+
+    private fun drawBomber(canvas: Canvas, inv: Invader) {
+        val s = inv.size
+        drawShadowRect(canvas, inv.x, inv.y, s * 0.95f, s * 0.55f)
+        fillPaint.style = Paint.Style.FILL
+        fillPaint.shader = RadialGradient(
+            inv.x - s * 0.3f, inv.y - s * 0.3f, s * 0.1f,
+            inv.x, inv.y, s * 1.2f,
+            intArrayOf(shade(inv.color, 1.6f), inv.color, shade(inv.color, 0.35f)),
+            floatArrayOf(0f, 0.5f, 1f),
+            Shader.TileMode.CLAMP
+        )
+        setShadow(inv.color)
+        canvas.drawRoundRect(
+            inv.x - s * 0.95f, inv.y - s * 0.55f,
+            inv.x + s * 0.95f, inv.y + s * 0.4f,
+            s * 0.4f, s * 0.4f, fillPaint
+        )
+        fillPaint.shader = null
+        setShadow(null)
+        // Bomb bay with blinking payload
+        fillPaint.color = Color.argb(220, 20, 10, 10)
+        canvas.drawCircle(inv.x, inv.y + s * 0.05f, s * 0.28f, fillPaint)
+        fillPaint.color = if (sin(inv.pulse * 4f) > 0f) Color.rgb(255, 90, 40) else Color.rgb(120, 40, 20)
+        canvas.drawCircle(inv.x, inv.y + s * 0.05f, s * 0.14f, fillPaint)
+        // HP pips for the tank
+        fillPaint.color = Color.WHITE
+        for (i in 0 until inv.hp) {
+            canvas.drawCircle(inv.x - s * 0.3f + i * s * 0.3f, inv.y - s * 0.35f, s * 0.07f, fillPaint)
+        }
     }
 
     private fun drawCrab(canvas: Canvas, inv: Invader) {
@@ -1642,11 +2143,40 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             fillPaint.style = Paint.Style.FILL
             fillPaint.color = b.color
             fillPaint.alpha = 255
-            canvas.drawRoundRect(
-                b.x - 4f * scale, b.y - 16f * scale,
-                b.x + 4f * scale, b.y + 10f * scale,
-                4f * scale, 4f * scale, fillPaint
-            )
+            when {
+                b.pierce -> { // Laser beam bolt
+                    fillPaint.color = Color.WHITE
+                    canvas.drawRoundRect(
+                        b.x - 2.5f * scale, b.y - 30f * scale,
+                        b.x + 2.5f * scale, b.y + 14f * scale,
+                        2.5f * scale, 2.5f * scale, fillPaint
+                    )
+                    fillPaint.color = b.color
+                    fillPaint.alpha = 130
+                    canvas.drawRoundRect(
+                        b.x - 6f * scale, b.y - 34f * scale,
+                        b.x + 6f * scale, b.y + 18f * scale,
+                        6f * scale, 6f * scale, fillPaint
+                    )
+                    fillPaint.alpha = 255
+                }
+                b.homing -> { // Missile rocket
+                    val rocket = Path().apply {
+                        moveTo(b.x, b.y - 14f * scale)
+                        lineTo(b.x - 5f * scale, b.y + 8f * scale)
+                        lineTo(b.x + 5f * scale, b.y + 8f * scale)
+                        close()
+                    }
+                    canvas.drawPath(rocket, fillPaint)
+                    fillPaint.color = Color.rgb(255, 220, 130)
+                    canvas.drawCircle(b.x, b.y + 10f * scale, (3f + Random.nextFloat() * 3f) * scale, fillPaint)
+                }
+                else -> canvas.drawRoundRect(
+                    b.x - 4f * scale, b.y - 16f * scale,
+                    b.x + 4f * scale, b.y + 10f * scale,
+                    4f * scale, 4f * scale, fillPaint
+                )
+            }
             fillPaint.style = Paint.Style.STROKE
             setShadow(null)
         }
@@ -1772,8 +2302,56 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         }
     }
 
-    /** Foreground layer: fast drifting rocks that sell the sense of depth. */
-    private fun drawDebris(canvas: Canvas) {
+    private fun drawBoss(canvas: Canvas) {
+        val b = boss ?: return
+        val s = 100f * scale
+        drawShadowEllipse(canvas, b.x, b.y + s * 0.2f, s * 1.3f, s * 0.3f)
+
+        // Menacing hull
+        fillPaint.style = Paint.Style.FILL
+        fillPaint.shader = LinearGradient(
+            b.x, b.y - s * 0.6f, b.x, b.y + s * 0.6f,
+            intArrayOf(
+                Color.rgb(90, 45, 130),
+                Color.rgb(40, 18, 66),
+                Color.rgb(12, 6, 22)
+            ),
+            floatArrayOf(0f, 0.5f, 1f),
+            Shader.TileMode.CLAMP
+        )
+        setShadow(Color.rgb(255, 80, 180))
+        canvas.drawOval(b.x - s * 1.3f, b.y - s * 0.5f, b.x + s * 1.3f, b.y + s * 0.55f, fillPaint)
+        fillPaint.shader = null
+        setShadow(null)
+
+        // Side cannons
+        fillPaint.color = Color.rgb(25, 12, 40)
+        for (side in floatArrayOf(-1f, 1f)) {
+            canvas.drawCircle(b.x + side * s * 1.05f, b.y + s * 0.1f, s * 0.22f, fillPaint)
+        }
+
+        // Pulsing weak-point core
+        val corePulse = 0.7f + sin(b.pulse * 2f) * 0.3f
+        fillPaint.shader = RadialGradient(
+            b.x, b.y, s * 0.4f,
+            intArrayOf(Color.WHITE, Color.rgb(255, 110, 200), Color.TRANSPARENT),
+            floatArrayOf(0f, 0.45f, 1f),
+            Shader.TileMode.CLAMP
+        )
+        fillPaint.alpha = (140 + corePulse * 100).toInt()
+        canvas.drawCircle(b.x, b.y, s * 0.4f, fillPaint)
+        fillPaint.alpha = 255
+        fillPaint.shader = null
+
+        // Spikes
+        fillPaint.color = Color.rgb(60, 30, 90)
+        for (i in -2..2) {
+            if (i == 0) continue
+            canvas.drawRect(b.x + i * s * 0.5f - s * 0.05f, b.y - s * 0.75f, b.x + i * s * 0.5f + s * 0.05f, b.y - s * 0.4f, fillPaint)
+        }
+    }
+
+    /** Foreground layer: fast drifting rocks that sell the sense of depth. */    private fun drawDebris(canvas: Canvas) {
         setShadow(null)
         for (d in debris) {
             canvas.save()
@@ -1840,6 +2418,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                 PowerType.LIFE -> "\u2665"
                 PowerType.NOVA -> "N"
                 PowerType.PART -> "P"
+                PowerType.WEAPON -> "W"
+                PowerType.ARMOR -> "A"
             }
             canvas.drawText(glyph, p.x, bobY + s * 0.42f, textPaint)
             textPaint.textAlign = Paint.Align.LEFT
@@ -1881,6 +2461,80 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         textPaint.color = Color.rgb(120, 255, 160)
         canvas.drawText("\u2665".repeat(lives.coerceAtLeast(0)), w - 30f, 56f * scale, textPaint)
         textPaint.textAlign = Paint.Align.LEFT
+
+        // Armor pips next to lives
+        if (armor > 0) {
+            fillPaint.color = Color.rgb(150, 170, 225)
+            setShadow(Color.rgb(150, 170, 225))
+            for (i in 0 until armor) {
+                canvas.drawCircle(w - 30f - 26f * scale - i * 22f * scale, 42f * scale, 8f * scale, fillPaint)
+            }
+            setShadow(null)
+        }
+
+        // Boss HP bar
+        val bs = boss
+        if (bs != null) {
+            val barW = w * 0.6f
+            val barX = w / 2f - barW / 2f
+            val barY = 84f * scale
+            fillPaint.color = Color.argb(160, 30, 8, 20)
+            canvas.drawRoundRect(barX, barY, barX + barW, barY + 16f * scale, 8f * scale, 8f * scale, fillPaint)
+            val frac = (bs.hp.toFloat() / bs.maxHp).coerceIn(0f, 1f)
+            fillPaint.shader = LinearGradient(
+                barX, barY, barX + barW, barY,
+                intArrayOf(Color.rgb(255, 60, 60), Color.rgb(255, 170, 60)),
+                floatArrayOf(0f, 1f),
+                Shader.TileMode.CLAMP
+            )
+            canvas.drawRoundRect(barX, barY, barX + barW * frac, barY + 16f * scale, 8f * scale, 8f * scale, fillPaint)
+            fillPaint.shader = null
+            textPaint.textAlign = Paint.Align.CENTER
+            textPaint.textSize = 20f * scale
+            textPaint.setShadowLayer(6f, 0f, 0f, Color.rgb(255, 80, 160))
+            textPaint.color = Color.rgb(255, 150, 210)
+            canvas.drawText("NAVE-MAE", w / 2f, barY - 6f * scale, textPaint)
+            textPaint.textAlign = Paint.Align.LEFT
+        }
+
+        // Active mission
+        val m = mission
+        if (m != null) {
+            textPaint.textAlign = Paint.Align.CENTER
+            textPaint.textSize = 22f * scale
+            textPaint.setShadowLayer(6f, 0f, 0f, Color.rgb(255, 216, 120))
+            textPaint.color = Color.rgb(255, 226, 150)
+            canvas.drawText("MISSAO: ${m.text} (${m.progress.coerceAtMost(m.target)}/${m.target})",
+                w / 2f, h - 18f * scale, textPaint)
+            textPaint.textAlign = Paint.Align.LEFT
+        }
+
+        // Weapon label (bottom-right)
+        val wName = when (weapon) {
+            Weapon.PLASMA -> "PLASMA"
+            Weapon.SPREAD -> "SPREAD"
+            Weapon.LASER -> "LASER"
+            Weapon.MISSILE -> "MISSIL"
+        }
+        textPaint.textAlign = Paint.Align.RIGHT
+        textPaint.textSize = 22f * scale
+        textPaint.setShadowLayer(6f, 0f, 0f, Color.rgb(170, 255, 245))
+        textPaint.color = Color.rgb(170, 255, 245)
+        canvas.drawText("ARMA: $wName", w - 30f, h - 18f * scale, textPaint)
+        textPaint.textAlign = Paint.Align.LEFT
+        textPaint.textSize = 40f * scale
+
+        // Sector banner
+        if (sectorBannerTimer > 0f) {
+            val sectorIndex = ((wave - 1) / 3).coerceAtMost(sectors.lastIndex)
+            val a = (sectorBannerTimer / 2f).coerceIn(0f, 1f)
+            bigTextPaint.alpha = (a * 255).toInt()
+            bigTextPaint.textSize = 60f * scale
+            bigTextPaint.setShadowLayer(20f, 0f, 0f, sectors[sectorIndex].accent)
+            bigTextPaint.color = sectors[sectorIndex].accent
+            canvas.drawText(sectors[sectorIndex].name, w / 2f, h * 0.55f, bigTextPaint)
+            bigTextPaint.alpha = 255
+        }
 
         if (waveBannerTimer > 0f) {
             val a = (waveBannerTimer / 1.6f).coerceIn(0f, 1f)
@@ -1975,9 +2629,13 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         var y: Float,
         val speed: Float,
         val color: Int,
-        var vx: Float = 0f
+        var vx: Float = 0f,
+        val pierce: Boolean = false,
+        val homing: Boolean = false,
+        val splash: Boolean = false
     ) {
         val trail = mutableListOf<Float>()
+        var pierceHits = 0
     }
 
     private class Invader(
@@ -1992,7 +2650,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         var alive: Boolean = true,
         var pulse: Float = Random.nextFloat() * 6f,
         var diving: Boolean = false,
-        var divePhase: Float = 0f
+        var divePhase: Float = 0f,
+        var mini: Boolean = false
     )
 
     private class Ufo(var x: Float, val y: Float, val vx: Float) {
@@ -2025,7 +2684,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         val alpha: Int
     )
 
-    private enum class PowerType { RAPID, TRIPLE, SHIELD, LIFE, NOVA, PART }
+    private enum class PowerType { RAPID, TRIPLE, SHIELD, LIFE, NOVA, PART, WEAPON, ARMOR }
 
     private class PowerUp(var x: Float, var y: Float, val type: PowerType, var phase: Float = Random.nextFloat() * 6f)
 
