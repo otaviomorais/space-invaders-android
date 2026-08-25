@@ -937,8 +937,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
         // Head dome with volume shading
         fillPaint.shader = RadialGradient(
-            inv.x - s * 0.25f, inv.y - s * 0.35f, s * 0.05f,
-            inv.x, inv.y - s * 0.05f, s * 0.75f,
+            inv.x - s * 0.2f, inv.y - s * 0.3f, s * 0.75f,
             intArrayOf(
                 shade(inv.color, 1.7f),
                 inv.color,
