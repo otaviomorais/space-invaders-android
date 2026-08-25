@@ -155,7 +155,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         var x: Float,
         var y: Float,
         val maxHp: Int,
-        var hp: Int,
+        var hp: Int = maxHp,
         var phase: Int = 0,
         var timer: Float = 1.6f,
         var cycle: Float = 6.5f,
@@ -1853,8 +1853,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         drawShadowRect(canvas, inv.x, inv.y, s * 0.95f, s * 0.55f)
         fillPaint.style = Paint.Style.FILL
         fillPaint.shader = RadialGradient(
-            inv.x - s * 0.3f, inv.y - s * 0.3f, s * 0.1f,
-            inv.x, inv.y, s * 1.2f,
+            inv.x - s * 0.3f, inv.y - s * 0.3f, s * 1.2f,
             intArrayOf(shade(inv.color, 1.6f), inv.color, shade(inv.color, 0.35f)),
             floatArrayOf(0f, 0.5f, 1f),
             Shader.TileMode.CLAMP
