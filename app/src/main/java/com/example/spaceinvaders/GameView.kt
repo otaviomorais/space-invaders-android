@@ -428,8 +428,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             Shader.TileMode.CLAMP
         )
         val spots = arrayOf(
-            Triple(0.16f, 0.26f), Triple(0.80f, 0.18f), Triple(0.55f, 0.88f),
-            Triple(0.32f, 0.62f), Triple(0.90f, 0.68f)
+            Pair(0.16f, 0.26f), Pair(0.80f, 0.18f), Pair(0.55f, 0.88f),
+            Pair(0.32f, 0.62f), Pair(0.90f, 0.68f)
         )
         for (i in nebulae.indices) {
             val (fx, fy) = spots[i]
