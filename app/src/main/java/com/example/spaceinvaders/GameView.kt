@@ -155,7 +155,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                         x = (c + 1) * (w / (cols + 1f)),
                         y = 140 * scale + r * 110 * scale,
                         size = (if (r == 0) 46f else 38f) * scale,
-                        hue = if (r == 0) Color.rgb(255, 70, 160) else Color.rgb(80, 220, 255),
+                        color = if (r == 0) Color.rgb(255, 70, 160) else Color.rgb(80, 220, 255),
                         alive = true
                     )
                 )
