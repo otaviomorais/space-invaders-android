@@ -31,3 +31,27 @@ jobs:
         with:
           name: space-invaders-debug-apk
           path: app/build/outputs/apk/debug/*.apk
+
+  desktop-preview:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Compile desktop preview (Java 8 bytecode)
+        run: |
+          mkdir -p desktop/build
+          javac --release 8 -d desktop/build desktop/DesktopPreview.java
+          jar --create --file space-invaders-preview.jar --main-class DesktopPreview -C desktop/build .
+
+      - name: Upload preview artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: space-invaders-desktop-preview
+          path: space-invaders-preview.jar
