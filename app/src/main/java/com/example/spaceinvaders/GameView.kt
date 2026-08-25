@@ -171,9 +171,14 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         playerW = 90f * scale
         if (playerX == 0f) playerX = w / 2f
         targetX = playerX
-        initStars()
-        initDust()
-        initBackgrounds()
+        try {
+            initStars()
+            initDust()
+            initBackgrounds()
+        } catch (t: Throwable) {
+            // A bad background shader must never prevent the game from rendering
+            Log.e("SpaceInvaders", "initBackgrounds failed", t)
+        }
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
@@ -256,7 +261,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         damagePaint.shader = RadialGradient(
             w / 2f, h / 2f, hypot(w, h) * 0.5f,
             intArrayOf(Color.TRANSPARENT, Color.argb(180, 255, 25, 55)),
-            floatArrayOf(0f, 0.62f, 1f),
+            floatArrayOf(0f, 1f),
             Shader.TileMode.CLAMP
         )
     }
