@@ -668,7 +668,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         }
     }
 
-    private fun drawShadowRect(x: Float, y: Float, hw: Float, hh: Float) {
+    private fun drawShadowRect(canvas: Canvas, x: Float, y: Float, hw: Float, hh: Float) {
         fillPaint.shader = null
         setShadow(null)
         fillPaint.color = Color.argb(90, 0, 0, 0)
@@ -680,7 +680,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         )
     }
 
-    private fun drawShadowCircle(x: Float, y: Float, r: Float) {
+    private fun drawShadowCircle(canvas: Canvas, x: Float, y: Float, r: Float) {
         fillPaint.shader = null
         setShadow(null)
         fillPaint.color = Color.argb(90, 0, 0, 0)
@@ -697,7 +697,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         val half = playerW
 
         // Ground shadow
-        drawShadowEllipse(x, y + half * 0.72f, half * 1.25f, half * 0.2f)
+        drawShadowEllipse(canvas, x, y + half * 0.72f, half * 1.25f, half * 0.2f)
 
         // Aura
         glowPaint.shader = RadialGradient(
@@ -734,7 +734,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         fillPaint.style = Paint.Style.FILL
         fillPaint.shader = LinearGradient(
             x - half, y - half, x + half, y + half,
-            arrayOf(
+            intArrayOf(
                 Color.rgb(190, 255, 240),
                 Color.rgb(0, 210, 175),
                 Color.rgb(0, 90, 110)
@@ -765,7 +765,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         // Fuselage with vertical metallic gradient
         fillPaint.shader = LinearGradient(
             x, y - half, x, y + half,
-            arrayOf(
+            intArrayOf(
                 Color.rgb(235, 255, 252),
                 Color.rgb(90, 235, 205),
                 Color.rgb(0, 110, 130)
@@ -794,7 +794,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         // Glass canopy
         fillPaint.shader = RadialGradient(
             x - half * 0.05f, y - half * 0.28f, half * 0.42f,
-            arrayOf(
+            intArrayOf(
                 Color.WHITE,
                 Color.rgb(140, 230, 255),
                 Color.argb(230, 10, 60, 110)
@@ -816,7 +816,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         canvas.restore()
     }
 
-    private fun drawShadowEllipse(x: Float, y: Float, rx: Float, ry: Float) {
+    private fun drawShadowEllipse(canvas: Canvas, x: Float, y: Float, rx: Float, ry: Float) {
         fillPaint.shader = null
         setShadow(null)
         fillPaint.color = Color.argb(100, 0, 0, 0)
@@ -840,13 +840,13 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private fun drawCrab(canvas: Canvas, inv: Invader) {
         val s = inv.size
         val pulse = 1f + sin(inv.pulse) * 0.06f
-        drawShadowRect(inv.x, inv.y, s * pulse, s * 0.5f)
+        drawShadowRect(canvas, inv.x, inv.y, s * pulse, s * 0.5f)
 
         // Shell with spherical shading
         fillPaint.style = Paint.Style.FILL
         fillPaint.shader = LinearGradient(
             inv.x - s, inv.y - s, inv.x + s, inv.y + s,
-            arrayOf(shade(inv.color, 1.55f), inv.color, shade(inv.color, 0.4f)),
+            intArrayOf(shade(inv.color, 1.55f), inv.color, shade(inv.color, 0.4f)),
             floatArrayOf(0f, 0.5f, 1f),
             Shader.TileMode.CLAMP
         )
@@ -901,7 +901,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
     private fun drawSquid(canvas: Canvas, inv: Invader) {
         val s = inv.size
-        drawShadowCircle(inv.x, inv.y, s * 0.62f)
+        drawShadowCircle(canvas, inv.x, inv.y, s * 0.62f)
 
         // Translucent outer membrane
         fillPaint.style = Paint.Style.FILL
@@ -909,7 +909,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         val memColor = shade(inv.color, 1.6f)
         fillPaint.shader = RadialGradient(
             inv.x, inv.y - s * 0.1f, s * 0.88f,
-            arrayOf(Color.argb(150, memColor shr 16 and 0xFF, memColor shr 8 and 0xFF, memColor and 0xFF), Color.TRANSPARENT),
+            intArrayOf(Color.argb(150, memColor shr 16 and 0xFF, memColor shr 8 and 0xFF, memColor and 0xFF), Color.TRANSPARENT),
             floatArrayOf(0f, 1f),
             Shader.TileMode.CLAMP
         )
@@ -939,7 +939,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         fillPaint.shader = RadialGradient(
             inv.x - s * 0.25f, inv.y - s * 0.35f, s * 0.05f,
             inv.x, inv.y - s * 0.05f, s * 0.75f,
-            arrayOf(
+            intArrayOf(
                 shade(inv.color, 1.7f),
                 inv.color,
                 shade(inv.color, 0.35f)
@@ -954,7 +954,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         val corePulse = 0.6f + sin(inv.pulse * 2f) * 0.4f
         fillPaint.shader = RadialGradient(
             inv.x, inv.y - s * 0.1f, s * 0.32f,
-            arrayOf(Color.WHITE, shade(inv.color, 1.4f), Color.TRANSPARENT),
+            intArrayOf(Color.WHITE, shade(inv.color, 1.4f), Color.TRANSPARENT),
             floatArrayOf(0f, 0.5f, 1f),
             Shader.TileMode.CLAMP
         )
@@ -975,13 +975,13 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
     private fun drawArmored(canvas: Canvas, inv: Invader) {
         val s = inv.size
-        drawShadowRect(inv.x, inv.y, s, s * 0.5f)
+        drawShadowRect(canvas, inv.x, inv.y, s, s * 0.5f)
 
         // Heavy metallic hull
         fillPaint.style = Paint.Style.FILL
         fillPaint.shader = LinearGradient(
             inv.x, inv.y - s * 0.6f, inv.x, inv.y + s * 0.35f,
-            arrayOf(
+            intArrayOf(
                 shade(inv.color, 1.6f),
                 inv.color,
                 shade(inv.color, 0.35f)
@@ -1043,7 +1043,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         setShadow(null)
         fillPaint.shader = RadialGradient(
             x, y + s * 0.3f, s * 1.4f,
-            arrayOf(Color.argb(90, 120, 255, 240), Color.TRANSPARENT),
+            intArrayOf(Color.argb(90, 120, 255, 240), Color.TRANSPARENT),
             floatArrayOf(0f, 1f),
             Shader.TileMode.CLAMP
         )
@@ -1053,7 +1053,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         // Metallic saucer body
         fillPaint.shader = LinearGradient(
             x, y - s * 0.28f, x, y + s * 0.34f,
-            arrayOf(
+            intArrayOf(
                 Color.rgb(230, 255, 252),
                 Color.rgb(130, 245, 235),
                 Color.rgb(10, 90, 105)
@@ -1069,7 +1069,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         // Glass dome with reflection
         fillPaint.shader = RadialGradient(
             x - s * 0.12f, y - s * 0.45f, s * 0.55f,
-            arrayOf(Color.WHITE, Color.rgb(255, 110, 220), Color.argb(200, 90, 10, 70)),
+            intArrayOf(Color.WHITE, Color.rgb(255, 110, 220), Color.argb(200, 90, 10, 70)),
             floatArrayOf(0f, 0.45f, 1f),
             Shader.TileMode.CLAMP
         )
@@ -1209,7 +1209,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     // ---------- Entities ----------
 
     private class Bullet(
-        val x: Float,
+        var x: Float,
         var y: Float,
         val speed: Float,
         val color: Int,
