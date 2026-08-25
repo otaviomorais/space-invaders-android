@@ -706,9 +706,9 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             val tipY = inv.y + s * 0.85f
             val path = Path().apply {
                 moveTo(inv.x + i * s * 0.22f - s * 0.08f, inv.y + s * 0.25f)
-                quadraticCurveTo(inv.x + i * s * 0.3f, inv.y + s * 0.6f, tipX, tipY)
+                quadTo(inv.x + i * s * 0.3f, inv.y + s * 0.6f, tipX, tipY)
                 lineTo(tipX + s * 0.1f, tipY)
-                quadraticCurveTo(inv.x + i * s * 0.3f + s * 0.1f, inv.y + s * 0.6f, inv.x + i * s * 0.22f + s * 0.08f, inv.y + s * 0.25f)
+                quadTo(inv.x + i * s * 0.3f + s * 0.1f, inv.y + s * 0.6f, inv.x + i * s * 0.22f + s * 0.08f, inv.y + s * 0.25f)
                 close()
             }
             canvas.drawPath(path, fillPaint)
