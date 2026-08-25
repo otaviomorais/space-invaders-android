@@ -38,3 +38,17 @@ O workflow `.github/workflows/android.yml` gera a cada push:
 - Tiros inimigos **mirados** na posição do jogador
 - Inimigos **mergulhadores** abandonam a formação em ataques em S
 - Sobreviventes finais ficam mais agressivos; velocidade e cadência escalam por onda
+
+## Power-ups e efeitos (v1.2)
+Inimigos destruídos podem dropar cápsulas (14% de chance):
+| Ícone | Power-up | Efeito |
+|-------|----------|--------|
+| R | Tiro Rápido | Cadência 2.5x por 8s |
+| T | Tiro Triplo | Leque de 3 tiros por 8s |
+| S | Escudo | Absorve 1 hit |
+| ♥ | Vida Extra | +1 vida (máx. 5) |
+| N | Nova Cósmica | Dano em tela cheia + limpa projéteis |
+
+**Efeitos de tela:** hit-stop cinematográfico, vinheta cósmica, pulso vermelho de dano, flash, textos flutuantes.
+
+**Fundo cósmico:** galáxias espirais girando, planeta distante com atmosfera, nebulosas profundas em deriva, estrelas cadentes, poeira estelar e estrelas cintilando — tudo se dissolvendo no vazio do infinito nas bordas da tela.

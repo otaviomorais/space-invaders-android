@@ -102,10 +102,5 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" \
             --title "Space Invaders $GITHUB_REF_NAME" \
-            --notes "APK release assinado (keystore efêmero de CI).
-
-          ## Novidades v1.1
-          - Naves com shading 3D (gradientes metálicos, cockpit, luzes de navegação)
-          - IA mais difícil: tiros mirados, mergulhadores e escalada por onda
-          - Release automatizado via tags" \
+            --generate-notes \
             app/build/outputs/apk/release/*.apk

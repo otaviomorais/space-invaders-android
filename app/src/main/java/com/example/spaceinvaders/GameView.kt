@@ -70,13 +70,31 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private var ufoTimer = 9f
     private var invaderFireTimer = 1.8f
 
+    // Power-ups & cosmic FX
+    private val powerUps = mutableListOf<PowerUp>()
+    private val meteors = mutableListOf<Meteor>()
+    private val dust = mutableListOf<Dust>()
+    private val floatTexts = mutableListOf<FloatText>()
+    private var rapidTimer = 0f
+    private var tripleTimer = 0f
+    private var shieldUp = false
+    private var hitStop = 0f
+    private var damagePulse = 0f
+    private var meteorTimer = 4f
+
     // Paints
     private val bgPaint = Paint()
     private val nebulae = arrayOf(
-        Paint(Paint.ANTI_ALIAS_FLAG), Paint(Paint.ANTI_ALIAS_FLAG), Paint(Paint.ANTI_ALIAS_FLAG)
+        Paint(Paint.ANTI_ALIAS_FLAG), Paint(Paint.ANTI_ALIAS_FLAG), Paint(Paint.ANTI_ALIAS_FLAG),
+        Paint(Paint.ANTI_ALIAS_FLAG), Paint(Paint.ANTI_ALIAS_FLAG)
     )
+    private val galaxyPaints = arrayOf(Paint(Paint.ANTI_ALIAS_FLAG), Paint(Paint.ANTI_ALIAS_FLAG))
+    private val planetPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val vignettePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val damagePaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private var bgW = 0f
     private var bgH = 0f
+    private var minDim = 0f
     private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -120,7 +138,12 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             lastTime = now
 
             if (surfaceReady && w > 0) {
-                update(dt)
+                var effDt = dt
+                if (hitStop > 0f) {
+                    hitStop -= dt
+                    effDt = dt * 0.12f
+                }
+                update(effDt)
                 draw()
             }
         }
@@ -138,6 +161,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         if (playerX == 0f) playerX = w / 2f
         targetX = playerX
         initStars()
+        initDust()
         initBackgrounds()
     }
 
@@ -151,24 +175,92 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         if (bgW == w && bgH == h) return
         bgW = w
         bgH = h
+        minDim = min(w, h)
         bgPaint.shader = LinearGradient(
             0f, 0f, 0f, h,
-            Color.rgb(6, 4, 24),
-            Color.rgb(28, 8, 48),
+            intArrayOf(
+                Color.rgb(3, 2, 12),
+                Color.rgb(13, 6, 34),
+                Color.rgb(30, 9, 48)
+            ),
+            floatArrayOf(0f, 0.55f, 1f),
             Shader.TileMode.CLAMP
         )
+        // Deep-space nebulae: the void of infinity
         val defs = arrayOf(
-            Triple(Color.argb(70, 110, 40, 190), 0.22f, 0.30f),
-            Triple(Color.argb(60, 20, 160, 170), 0.75f, 0.22f),
-            Triple(Color.argb(55, 200, 40, 120), 0.50f, 0.85f)
+            Triple(Color.argb(60, 90, 30, 190), 0.16f, 0.26f),
+            Triple(Color.argb(55, 20, 140, 165), 0.80f, 0.18f),
+            Triple(Color.argb(50, 190, 30, 110), 0.55f, 0.88f),
+            Triple(Color.argb(45, 40, 60, 210), 0.32f, 0.62f),
+            Triple(Color.argb(42, 120, 80, 255), 0.90f, 0.68f)
         )
         for (i in nebulae.indices) {
             val (col, fx, fy) = defs[i]
-            val r = min(w, h) * 0.55f
             nebulae[i].shader = RadialGradient(
-                w * fx, h * fy, r,
+                w * fx, h * fy, minDim * 0.52f,
                 col, Color.TRANSPARENT,
                 Shader.TileMode.CLAMP
+            )
+        }
+        // Spiral galaxy cores
+        val gals = arrayOf(
+            floatArrayOf(w * 0.74f, h * 0.28f, minDim * 0.17f),
+            floatArrayOf(w * 0.16f, h * 0.76f, minDim * 0.115f)
+        )
+        for (i in galaxyPaints.indices) {
+            val g = gals[i]
+            galaxyPaints[i].shader = RadialGradient(
+                g[0], g[1], g[2],
+                intArrayOf(
+                    Color.argb(200, 255, 250, 235),
+                    Color.argb(90, 205, 175, 255),
+                    Color.argb(35, 130, 100, 230),
+                    Color.TRANSPARENT
+                ),
+                floatArrayOf(0f, 0.22f, 0.55f, 1f),
+                Shader.TileMode.CLAMP
+            )
+        }
+        // Distant planet with lit limb
+        val px = w * 1.04f
+        val py = -h * 0.24f
+        val pr = h * 0.44f
+        planetPaint.shader = RadialGradient(
+            px - pr * 0.5f, py + pr * 0.5f, pr * 1.45f,
+            intArrayOf(
+                Color.rgb(38, 26, 64),
+                Color.rgb(14, 9, 30),
+                Color.rgb(4, 3, 12)
+            ),
+            floatArrayOf(0f, 0.5f, 1f),
+            Shader.TileMode.CLAMP
+        )
+        // Vignette: edges dissolve into the void
+        vignettePaint.shader = RadialGradient(
+            w / 2f, h / 2f, hypot(w, h) * 0.55f,
+            intArrayOf(Color.TRANSPARENT, Color.TRANSPARENT, Color.argb(170, 1, 0, 10)),
+            floatArrayOf(0f, 0.55f, 1f),
+            Shader.TileMode.CLAMP
+        )
+        damagePaint.shader = RadialGradient(
+            w / 2f, h / 2f, hypot(w, h) * 0.5f,
+            intArrayOf(Color.TRANSPARENT, Color.argb(180, 255, 25, 55)),
+            floatArrayOf(0f, 0.62f, 1f),
+            Shader.TileMode.CLAMP
+        )
+    }
+
+    private fun initDust() {
+        dust.clear()
+        repeat(26) {
+            dust.add(
+                Dust(
+                    Random.nextFloat() * w,
+                    Random.nextFloat() * h,
+                    (Random.nextFloat() * 3f + 1.2f) * scale,
+                    (Random.nextFloat() - 0.5f) * 7f * scale,
+                    Random.nextFloat() * 16f + 7f
+                )
             )
         }
     }
@@ -182,7 +274,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                     Random.nextFloat() * h,
                     Random.nextFloat() * 2.2f + 0.6f,
                     Random.nextFloat() * 46f + 14f,
-                    Color.argb((Random.nextFloat() * 130 + 80).toInt(), 255, 255, 255)
+                    (Random.nextFloat() * 130 + 80).toInt(),
+                    Random.nextFloat() * 6.28f
                 )
             )
         }
@@ -246,10 +339,15 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         bullets.clear()
         enemyBullets.clear()
         particles.clear()
+        powerUps.clear()
+        floatTexts.clear()
         ufo = null
         ufoTimer = 9f
         state = State.PLAYING
         invincible = 0f
+        rapidTimer = 0f
+        tripleTimer = 0f
+        shieldUp = false
         spawnWave()
     }
 
@@ -304,7 +402,15 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         updateInvaders(dt)
         updateUfo(dt)
         updateParticles(dt)
+        updatePowerUps(dt)
+        updateMeteors(dt)
+        updateDust(dt)
+        updateFloatTexts(dt)
         checkCollisions()
+
+        rapidTimer -= dt
+        tripleTimer -= dt
+        damagePulse = (damagePulse - dt * 2f).coerceAtLeast(0f)
 
         // ---- Enemy fire (harder AI) ----
         invaderFireTimer -= dt
@@ -499,6 +605,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                         explode(inv.x, inv.y, inv.color, big = true)
                         addScore(if (inv.variant == 2) 40 else if (inv.variant == 0) 30 else 20)
                         shake = maxOf(shake, 6f)
+                        hitStop = maxOf(hitStop, 0.05f)
+                        if (Random.nextFloat() < 0.14f) {
+                            powerUps.add(PowerUp(inv.x, inv.y, rollPowerType()))
+                        }
                     } else {
                         addScore(5)
                     }
@@ -532,9 +642,26 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
     private fun hitPlayer(instantDeath: Boolean) {
         if (state != State.PLAYING || invincible > 0f) return
+
+        // Shield absorbs one non-lethal hit
+        if (shieldUp && !instantDeath) {
+            shieldUp = false
+            invincible = 1.2f
+            explode(playerX, playerY - playerW * 0.4f, Color.rgb(111, 168, 255), big = false)
+            particles.add(
+                Particle(playerX, playerY - playerW * 0.4f, 0f, 0f, 12f * scale, 0.4f, 0.4f,
+                    Color.rgb(111, 168, 255), 0f).apply { isRing = true }
+            )
+            addFloat("ESCUDO QUEBRADO", playerX, playerY - 80 * scale, Color.rgb(111, 168, 255))
+            shake = maxOf(shake, 8f)
+            return
+        }
+
         explode(playerX, playerY, Color.rgb(0, 255, 180), big = true)
         shake = 18f
         flashAlpha = 0.55f
+        damagePulse = 1f
+        hitStop = maxOf(hitStop, 0.14f)
         lives--
         if (lives <= 0 || instantDeath) {
             lives = 0
@@ -550,9 +677,157 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     }
 
     private fun shoot() {
-        fireCooldown = 0.18f
-        bullets.add(Bullet(playerX, playerY - playerW, 1150f * scale, Color.rgb(120, 255, 200)))
+        val rapid = rapidTimer > 0f
+        fireCooldown = if (rapid) 0.07f else 0.18f
+        val spd = 1150f * scale
+        if (tripleTimer > 0f) {
+            for (a in floatArrayOf(-0.22f, 0f, 0.22f)) {
+                bullets.add(
+                    Bullet(playerX, playerY - playerW, spd * cos(a).coerceAtLeast(0.7f),
+                        Color.rgb(120, 255, 200), sin(a) * spd)
+                )
+            }
+        } else {
+            bullets.add(Bullet(playerX, playerY - playerW, spd, Color.rgb(120, 255, 200)))
+        }
         spawnSparks(playerX, playerY - playerW, Color.rgb(120, 255, 200), count = 4, small = true, spreadUp = true)
+    }
+
+    // ---------- Power-ups & cosmic FX ----------
+
+    private fun rollPowerType(): PowerType {
+        val r = Random.nextFloat()
+        return when {
+            r < 0.30f -> PowerType.RAPID
+            r < 0.60f -> PowerType.TRIPLE
+            r < 0.80f -> PowerType.SHIELD
+            r < 0.90f -> PowerType.LIFE
+            else -> PowerType.NOVA
+        }
+    }
+
+    private fun powerColor(t: PowerType): Int = when (t) {
+        PowerType.RAPID -> Color.rgb(255, 193, 77)
+        PowerType.TRIPLE -> Color.rgb(89, 229, 255)
+        PowerType.SHIELD -> Color.rgb(111, 168, 255)
+        PowerType.LIFE -> Color.rgb(255, 111, 165)
+        PowerType.NOVA -> Color.rgb(199, 125, 255)
+    }
+
+    private fun updatePowerUps(dt: Float) {
+        if (state != State.PLAYING) return
+        powerUps.removeAll { p ->
+            p.phase += dt * 3f
+            p.y += 130f * scale * dt
+            p.x += sin(p.phase) * 42f * scale * dt
+            p.x = p.x.coerceIn(30f * scale, w - 30f * scale)
+            if (p.y > h + 50f * scale) return@removeAll true
+            // Pickup?
+            if (hypot(playerX - p.x, playerY - p.y) < playerW * 0.95f) {
+                applyPowerUp(p.type)
+                spawnSparks(p.x, p.y, powerColor(p.type), count = 18, small = false)
+                return@removeAll true
+            }
+            false
+        }
+    }
+
+    private fun applyPowerUp(type: PowerType) {
+        when (type) {
+            PowerType.RAPID -> {
+                rapidTimer = 8f
+                addFloat("TIRO RÁPIDO!", playerX, playerY - 70 * scale, powerColor(type))
+            }
+            PowerType.TRIPLE -> {
+                tripleTimer = 8f
+                addFloat("TIRO TRIPLO!", playerX, playerY - 70 * scale, powerColor(type))
+            }
+            PowerType.SHIELD -> {
+                shieldUp = true
+                addFloat("ESCUDO!", playerX, playerY - 70 * scale, powerColor(type))
+            }
+            PowerType.LIFE -> {
+                lives = (lives + 1).coerceAtMost(5)
+                flashAlpha = maxOf(flashAlpha, 0.22f)
+                addFloat("+1 VIDA", playerX, playerY - 70 * scale, powerColor(type))
+            }
+            PowerType.NOVA -> applyNova()
+        }
+        shake = maxOf(shake, 5f)
+    }
+
+    /** Shockwave that damages every enemy on screen and clears hostile fire. */
+    private fun applyNova() {
+        for (inv in invaders.toList()) {
+            if (!inv.alive) continue
+            inv.hp--
+            if (inv.hp <= 0) {
+                inv.alive = false
+                explode(inv.x, inv.y, inv.color, big = true)
+                addScore(if (inv.variant == 2) 40 else if (inv.variant == 0) 30 else 20)
+            } else {
+                spawnSparks(inv.x, inv.y, inv.color, count = 6, small = true)
+            }
+        }
+        for (b in enemyBullets) spawnSparks(b.x, b.y, Color.rgb(255, 150, 60), count = 2, small = true)
+        enemyBullets.clear()
+        val cx = w / 2f
+        val cy = h / 2f
+        particles.add(Particle(cx, cy, 0f, 0f, 30f * scale, 0.6f, 0.6f, Color.rgb(199, 125, 255), 0f).apply { isRing = true })
+        particles.add(Particle(cx, cy, 0f, 0f, 10f * scale, 0.45f, 0.45f, Color.WHITE, 0f).apply { isRing = true })
+        flashAlpha = 0.35f
+        shake = maxOf(shake, 14f)
+        hitStop = 0.12f
+        addFloat("NOVA CÓSMICA!", cx, cy - 60 * scale, Color.rgb(199, 125, 255))
+    }
+
+    private fun addFloat(text: String, x: Float, y: Float, color: Int) {
+        floatTexts.add(FloatText(text, x.coerceIn(140 * scale, w - 140 * scale), y, color))
+    }
+
+    private fun updateFloatTexts(dt: Float) {
+        floatTexts.removeAll { t ->
+            t.life -= dt
+            t.y -= 46f * scale * dt
+            t.life <= 0f
+        }
+    }
+
+    private fun updateMeteors(dt: Float) {
+        meteorTimer -= dt
+        if (meteorTimer <= 0f) {
+            val fromLeft = Random.nextBoolean()
+            val speed = (650f + Random.nextFloat() * 550f) * scale
+            val angle = Math.toRadians((if (fromLeft) 25.0 else 155.0) + Random.nextDouble() * 24.0 - 12.0)
+            meteors.add(
+                Meteor(
+                    x = if (fromLeft) -40f else w + 40f,
+                    y = Random.nextFloat() * h * 0.45f,
+                    vx = cos(angle.toFloat()) * speed,
+                    vy = abs(sin(angle.toFloat())) * speed,
+                    len = (90f + Random.nextFloat() * 130f) * scale
+                )
+            )
+            meteorTimer = Random.nextFloat() * 5f + 4f
+        }
+        meteors.removeAll { m ->
+            m.x += m.vx * dt
+            m.y += m.vy * dt
+            m.x < -250f || m.x > w + 250f || m.y > h + 250f
+        }
+    }
+
+    private fun updateDust(dt: Float) {
+        for (d in dust) {
+            d.x += d.drift * dt
+            d.y += d.speed * scale * dt
+            if (d.y > h + d.radius) {
+                d.y = -d.radius
+                d.x = Random.nextFloat() * w
+            }
+            if (d.x < -d.radius) d.x = w + d.radius
+            if (d.x > w + d.radius) d.x = -d.radius
+        }
     }
 
     // ---------- Particles ----------
@@ -613,12 +888,17 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
             drawBackground(canvas)
             drawStars(canvas)
+            drawMeteors(canvas)
+            drawDust(canvas)
+            drawPlanet(canvas)
+            drawGalaxies(canvas)
             drawParticlesBelow(canvas)
 
             when (state) {
                 State.PLAYING -> {
                     drawUfo(canvas)
                     drawInvaders(canvas)
+                    drawPowerUps(canvas)
                     drawPlayer(canvas)
                     drawBullets(canvas)
                 }
@@ -626,14 +906,25 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             }
 
             drawParticlesAbove(canvas)
+            drawFloatTexts(canvas)
             drawHud(canvas)
 
             canvas.restore()
 
+            // Vignette + damage pulse live in screen space
+            fillPaint.style = Paint.Style.FILL
+            fillPaint.shader = null
+            setShadow(null)
+            canvas.drawRect(0f, 0f, w, h, vignettePaint)
+            if (damagePulse > 0.01f) {
+                val alpha = (damagePulse * 170).toInt().coerceIn(0, 255)
+                val saved = canvas.saveLayerAlpha(0f, 0f, w, h, alpha)
+                canvas.drawRect(0f, 0f, w, h, damagePaint)
+                canvas.restoreToCount(saved)
+            }
+
             if (flashAlpha > 0.01f) {
-                fillPaint.style = Paint.Style.FILL
-                fillPaint.shader = null
-                fillPaint.color = Color.argb((flashAlpha * 255).toInt(), 255, 255, 255)
+                fillPaint.color = Color.argb((flashAlpha * 255).toInt(), 235, 245, 255)
                 canvas.drawRect(0f, 0f, w, h, fillPaint)
             }
         } finally {
@@ -663,9 +954,12 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         fillPaint.style = Paint.Style.FILL
         setShadow(null)
         for (s in stars) {
-            fillPaint.color = s.color
+            val twk = 0.65f + 0.35f * sin(bgTime * 1.7f + s.seed)
+            fillPaint.color = Color.WHITE
+            fillPaint.alpha = (s.alpha * twk).toInt()
             canvas.drawCircle(s.x, s.y, s.radius, fillPaint)
         }
+        fillPaint.alpha = 255
     }
 
     private fun drawShadowRect(canvas: Canvas, x: Float, y: Float, hw: Float, hh: Float) {
@@ -724,6 +1018,18 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             canvas.drawPath(flamePath, fillPaint)
         }
         setShadow(null)
+
+        // Shield bubble
+        if (shieldUp) {
+            fillPaint.style = Paint.Style.STROKE
+            val shimmer = 90 + sin(bgTime * 6f) * 40f
+            fillPaint.strokeWidth = 3.5f * scale
+            fillPaint.color = Color.argb(shimmer.toInt().coerceIn(0, 255), 120, 180, 255)
+            canvas.drawCircle(x, y - half * 0.1f, half * 1.55f, fillPaint)
+            fillPaint.style = Paint.Style.FILL
+            fillPaint.color = Color.argb(26, 110, 170, 255)
+            canvas.drawCircle(x, y - half * 0.1f, half * 1.55f, fillPaint)
+        }
 
         // Banking tilt for a pseudo-3D feel
         val bank = ((targetX - playerX) / playerW).coerceIn(-1f, 1f) * 16f
@@ -1146,6 +1452,154 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         fillPaint.alpha = 255
     }
 
+    private fun drawGalaxies(canvas: Canvas) {
+        val gals = arrayOf(
+            floatArrayOf(w * 0.74f, h * 0.28f, minDim * 0.17f, 14f),
+            floatArrayOf(w * 0.16f, h * 0.76f, minDim * 0.115f, -22f)
+        )
+        fillPaint.style = Paint.Style.FILL
+        setShadow(null)
+        for (i in gals.indices) {
+            val g = gals[i]
+            canvas.save()
+            canvas.translate(g[0], g[1])
+            canvas.rotate(bgTime * g[3])
+            canvas.scale(1f, 0.42f)
+            // Spiral arms
+            fillPaint.style = Paint.Style.STROKE
+            for (arm in 0..2) {
+                fillPaint.strokeWidth = (2.5f - arm) * scale + 1f
+                fillPaint.color = Color.argb(46 - arm * 12, 200, 180, 255)
+                canvas.drawCircle(0f, 0f, g[2] * (0.45f + arm * 0.24f), fillPaint)
+            }
+            // Glowing core (drawn unrotated)
+            fillPaint.style = Paint.Style.FILL
+            canvas.restore()
+            fillPaint.shader = galaxyPaints[i].shader
+            if (fillPaint.shader != null) canvas.drawCircle(g[0], g[1], g[2], fillPaint)
+            fillPaint.shader = null
+        }
+    }
+
+    private fun drawPlanet(canvas: Canvas) {
+        val px = w * 1.04f
+        val py = -h * 0.24f
+        val pr = h * 0.44f
+        fillPaint.style = Paint.Style.FILL
+        setShadow(null)
+        fillPaint.shader = planetPaint.shader
+        if (fillPaint.shader != null) {
+            canvas.drawCircle(px, py, pr, fillPaint)
+        }
+        fillPaint.shader = null
+        // Atmosphere rim
+        fillPaint.style = Paint.Style.STROKE
+        fillPaint.strokeWidth = 3f * scale
+        fillPaint.color = Color.argb(80, 130, 210, 255)
+        canvas.drawCircle(px, py, pr + 2f * scale, fillPaint)
+        fillPaint.strokeWidth = 9f * scale
+        fillPaint.color = Color.argb(26, 90, 170, 255)
+        canvas.drawCircle(px, py, pr + 7f * scale, fillPaint)
+        fillPaint.style = Paint.Style.FILL
+    }
+
+    private fun drawMeteors(canvas: Canvas) {
+        fillPaint.style = Paint.Style.STROKE
+        setShadow(null)
+        for (m in meteors) {
+            val nx = m.vx
+            val ny = m.vy
+            val nLen = hypot(nx, ny)
+            val tx = m.x - nx / nLen * m.len
+            val ty = m.y - ny / nLen * m.len
+            fillPaint.shader = LinearGradient(
+                m.x, m.y, tx, ty,
+                intArrayOf(Color.WHITE, Color.argb(150, 150, 220, 255), Color.TRANSPARENT),
+                floatArrayOf(0f, 0.25f, 1f),
+                Shader.TileMode.CLAMP
+            )
+            fillPaint.strokeWidth = 2.5f * scale
+            canvas.drawLine(m.x, m.y, tx, ty, fillPaint)
+            fillPaint.shader = null
+            fillPaint.style = Paint.Style.FILL
+            fillPaint.color = Color.WHITE
+            canvas.drawCircle(m.x, m.y, 3f * scale, fillPaint)
+            fillPaint.style = Paint.Style.STROKE
+        }
+        fillPaint.style = Paint.Style.FILL
+    }
+
+    private fun drawDust(canvas: Canvas) {
+        setShadow(null)
+        for (d in dust) {
+            fillPaint.color = Color.argb(34, 190, 210, 255)
+            canvas.drawCircle(d.x, d.y, d.radius, fillPaint)
+        }
+    }
+
+    private fun drawPowerUps(canvas: Canvas) {
+        val s = 24f * scale
+        for (p in powerUps) {
+            val color = powerColor(p.type)
+            val bobY = p.y + sin(p.phase * 1.4f) * 6f * scale
+            drawShadowCircle(canvas, p.x, bobY, s)
+            setShadow(color)
+
+            // Rotating diamond capsule
+            canvas.save()
+            canvas.translate(p.x, bobY)
+            canvas.rotate((p.phase * 40f) % 360f)
+            fillPaint.style = Paint.Style.FILL
+            fillPaint.shader = LinearGradient(
+                -s, -s, s, s,
+                intArrayOf(shade(color, 1.5f), color, shade(color, 0.5f)),
+                floatArrayOf(0f, 0.5f, 1f),
+                Shader.TileMode.CLAMP
+            )
+            canvas.drawRoundRect(-s, -s, s, s, s * 0.35f, s * 0.35f, fillPaint)
+            fillPaint.shader = null
+            canvas.restore()
+
+            // Pulsing halo ring
+            fillPaint.style = Paint.Style.STROKE
+            fillPaint.strokeWidth = 2.5f * scale
+            fillPaint.color = Color.argb((110 + sin(p.phase * 2.4f) * 70f).toInt().coerceIn(0, 255), color shr 16 and 0xFF, color shr 8 and 0xFF, color and 0xFF)
+            canvas.drawCircle(p.x, bobY, s * 1.55f + sin(p.phase * 2.4f) * 4f * scale, fillPaint)
+            fillPaint.style = Paint.Style.FILL
+
+            // Icon glyph
+            setShadow(null)
+            textPaint.textAlign = Paint.Align.CENTER
+            textPaint.textSize = s * 1.15f
+            textPaint.setShadowLayer(8f, 0f, 0f, Color.BLACK)
+            textPaint.color = Color.WHITE
+            val glyph = when (p.type) {
+                PowerType.RAPID -> "R"
+                PowerType.TRIPLE -> "T"
+                PowerType.SHIELD -> "S"
+                PowerType.LIFE -> "\u2665"
+                PowerType.NOVA -> "N"
+            }
+            canvas.drawText(glyph, p.x, bobY + s * 0.42f, textPaint)
+            textPaint.textAlign = Paint.Align.LEFT
+        }
+        setShadow(null)
+    }
+
+    private fun drawFloatTexts(canvas: Canvas) {
+        textPaint.textAlign = Paint.Align.CENTER
+        for (t in floatTexts) {
+            val a = (t.life / 1.1f).coerceIn(0f, 1f)
+            textPaint.textSize = 36f * scale
+            textPaint.setShadowLayer(14f, 0f, 0f, t.color)
+            textPaint.color = Color.argb((a * 255).toInt(), t.color shr 16 and 0xFF, t.color shr 8 and 0xFF, t.color and 0xFF)
+            canvas.drawText(t.text, t.x, t.y, textPaint)
+        }
+        textPaint.textAlign = Paint.Align.LEFT
+        textPaint.setShadowLayer(10f, 0f, 0f, Color.CYAN)
+        textPaint.color = Color.WHITE
+    }
+
     private fun drawHud(canvas: Canvas) {
         setShadow(null)
         fillPaint.shader = null
@@ -1176,6 +1630,42 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             canvas.drawText("WAVE $wave", w / 2f, h * 0.42f, bigTextPaint)
             bigTextPaint.alpha = 255
         }
+
+        // Active power-up bars (top-left, under score)
+        var barY = 78f * scale
+        val barW = 150f * scale
+        val barH = 9f * scale
+        setShadow(null)
+        if (rapidTimer > 0f) {
+            drawPowerBar(canvas, 30f, barY, barW, barH, rapidTimer / 8f, powerColor(PowerType.RAPID), "RAPID")
+            barY += barH + 7f * scale
+        }
+        if (tripleTimer > 0f) {
+            drawPowerBar(canvas, 30f, barY, barW, barH, tripleTimer / 8f, powerColor(PowerType.TRIPLE), "TRIPLE")
+            barY += barH + 7f * scale
+        }
+        if (shieldUp) {
+            fillPaint.color = Color.argb(200, 111, 168, 255)
+            canvas.drawCircle(30f + barH / 2f, barY + barH / 2f, barH * 0.75f, fillPaint)
+            textPaint.textSize = 22f * scale
+            textPaint.setShadowLayer(6f, 0f, 0f, Color.rgb(111, 168, 255))
+            textPaint.color = Color.rgb(170, 205, 255)
+            canvas.drawText("SHIELD", 30f + barH * 1.4f, barY + barH, textPaint)
+            textPaint.color = Color.WHITE
+        }
+    }
+
+    private fun drawPowerBar(canvas: Canvas, x: Float, y: Float, bw: Float, bh: Float, frac: Float, color: Int, label: String) {
+        fillPaint.style = Paint.Style.FILL
+        setShadow(null)
+        fillPaint.color = Color.argb(70, 0, 0, 0)
+        canvas.drawRoundRect(x, y, x + bw, y + bh, bh / 2f, bh / 2f, fillPaint)
+        fillPaint.color = color
+        canvas.drawRoundRect(x, y, x + bw * frac.coerceIn(0f, 1f), y + bh, bh / 2f, bh / 2f, fillPaint)
+        textPaint.textSize = 20f * scale
+        textPaint.setShadowLayer(5f, 0f, 0f, color)
+        textPaint.color = Color.WHITE
+        canvas.drawText(label, x + bw + 12f * scale, y + bh * 0.95f, textPaint)
     }
 
     private fun drawGameOver(canvas: Canvas) {
@@ -1249,5 +1739,15 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         var isRing: Boolean = false
     )
 
-    private class Star(var x: Float, var y: Float, val radius: Float, val speed: Float, val color: Int)
+    private class Star(var x: Float, var y: Float, val radius: Float, val speed: Float, val alpha: Int, val seed: Float)
+
+    private enum class PowerType { RAPID, TRIPLE, SHIELD, LIFE, NOVA }
+
+    private class PowerUp(var x: Float, var y: Float, val type: PowerType, var phase: Float = Random.nextFloat() * 6f)
+
+    private class Meteor(var x: Float, var y: Float, val vx: Float, val vy: Float, val len: Float)
+
+    private class Dust(var x: Float, var y: Float, val radius: Float, val drift: Float, val speed: Float)
+
+    private class FloatText(val text: String, var x: Float, var y: Float, val color: Int, var life: Float = 1.1f)
 }
