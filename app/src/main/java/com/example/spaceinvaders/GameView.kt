@@ -1231,7 +1231,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         bullets.removeAll { b ->
             var consumed = false
             var hits = 0
-            for (inv in invaders) {
+            // Snapshot: killing a Splitter adds minis to `invaders` mid-iteration
+            for (inv in invaders.toList()) {
                 if (!inv.alive) continue
                 if (hypot(inv.x - b.x, inv.y - b.y) < inv.size * 1.1f) {
                     damageInvader(inv, 1)
