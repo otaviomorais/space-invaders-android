@@ -630,6 +630,11 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         waveBannerTimer = 1.6f
         // Reinforced hull regenerates its shield every wave
         if (hullUp > 0) shieldUp = true
+        // Tutorial: garante W e P visíveis na onda 1
+        if (wave == 1 && !bossWave) {
+            powerUps.add(PowerUp(w * 0.32f, h * 0.28f, PowerType.WEAPON))
+            powerUps.add(PowerUp(w * 0.68f, h * 0.32f, PowerType.PART))
+        }
     }
 
     private fun resetGame() {
@@ -1508,16 +1513,16 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private fun rollPowerType(): PowerType {
         val r = Random.nextFloat()
         return when {
-            r < 0.16f -> PowerType.RAPID
-            r < 0.30f -> PowerType.TRIPLE
-            r < 0.42f -> PowerType.SHIELD
-            r < 0.52f -> PowerType.LIFE
-            r < 0.60f -> PowerType.NOVA
-            r < 0.68f -> PowerType.PART
-            r < 0.76f -> PowerType.WEAPON
-            r < 0.82f -> PowerType.ARMOR
-            r < 0.88f -> PowerType.SLOW
-            r < 0.94f -> PowerType.MAGNET
+            r < 0.14f -> PowerType.RAPID
+            r < 0.26f -> PowerType.TRIPLE
+            r < 0.36f -> PowerType.SHIELD
+            r < 0.44f -> PowerType.LIFE
+            r < 0.52f -> PowerType.NOVA
+            r < 0.62f -> PowerType.PART
+            r < 0.72f -> PowerType.WEAPON
+            r < 0.80f -> PowerType.ARMOR
+            r < 0.86f -> PowerType.SLOW
+            r < 0.93f -> PowerType.MAGNET
             else -> PowerType.CLONE
         }
     }
