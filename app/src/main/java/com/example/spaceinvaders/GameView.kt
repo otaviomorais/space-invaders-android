@@ -13,6 +13,7 @@ import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import kotlin.math.abs
+import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.min
@@ -96,6 +97,13 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private var cannonUp = 0
     private var wingUp = 0
     private var hullUp = 0
+    private var droneUp = 0
+    private var coreUp = 0
+    private var shieldGenTimer = 0f
+    private var slowTimer = 0f
+    private var magnetTimer = 0f
+    private var cloneTimer = 0f
+    private var droneFireTimer = 0f
 
     // Depth & reactive ambience
     private val debris = mutableListOf<Debris>()
@@ -174,6 +182,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         var y: Float,
         val maxHp: Int,
         var hp: Int = maxHp,
+        var type: Int = 0,
         var phase: Int = 0,
         var timer: Float = 1.6f,
         var cycle: Float = 6.5f,
@@ -491,7 +500,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         2 -> Color.rgb(120, 230, 95)    // armored - green
         3 -> Color.rgb(255, 150, 50)    // hunter - orange
         4 -> Color.rgb(235, 80, 60)     // bomber - red
-        else -> Color.rgb(170, 255, 90) // splitter - lime
+        5 -> Color.rgb(170, 255, 90)    // splitter - lime
+        6 -> Color.rgb(100, 180, 255)   // shield bearer - ice blue
+        7 -> Color.rgb(255, 220, 80)    // sniper - gold
+        else -> Color.rgb(255, 90, 130) // swarmer - hot pink
     }
 
     private fun setSector(index: Int) {
@@ -542,11 +554,14 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         if (wave % 4 == 0) {
             bossWave = true
             entering = false
+            val bossType = sectorIndex % 3
+            val bossNames = arrayOf("RAINHA NEBULOSA", "LEVIATA GLACIAL", "TITA VULCANICO")
             boss = Boss(
                 x = w / 2f, y = -180f * scale,
-                maxHp = 40 + sectorIndex * 16 + wave * 2
+                maxHp = 42 + sectorIndex * 18 + wave * 2 + bossType * 8,
+                type = bossType
             )
-            addFloat("ALERTA: NAVE-MAE!", w / 2f, h * 0.35f, Color.rgb(255, 80, 120))
+            addFloat("ALERTA: ${bossNames[bossType]}!", w / 2f, h * 0.35f, sectors[sectorIndex].accent)
             shake = maxOf(shake, 10f)
             return
         }
@@ -577,15 +592,21 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             for (c in 0 until cols) {
                 var variant = r % 3
                 val roll = Random.nextFloat()
-                if (wave >= 2 && roll < 0.14f) variant = 3
-                else if (wave >= 3 && roll < 0.24f) variant = 4
-                else if (wave >= 4 && roll < 0.34f) variant = 5
+                if (wave >= 6 && roll < 0.10f) variant = 8
+                else if (wave >= 5 && roll < 0.19f) variant = 7
+                else if (wave >= 3 && roll < 0.30f) variant = 6
+                else if (wave >= 2 && roll < 0.40f) variant = 3
+                else if (wave >= 3 && roll < 0.50f) variant = 4
+                else if (wave >= 4 && roll < 0.58f) variant = 5
                 val size = (when (variant) {
                     0 -> 40f
                     1 -> 36f
                     3 -> 34f
                     4 -> 52f
                     5 -> 34f
+                    6 -> 44f
+                    7 -> 32f
+                    8 -> 22f
                     else -> 46f
                 }) * scale
                 invaders.add(
@@ -598,7 +619,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                         color = invaderColor(variant),
                         variant = variant,
                         hp = when (variant) {
-                            2 -> 2
+                            2, 6 -> 2
                             4 -> 3
                             else -> if (r == 0 && wave >= 4) 2 else 1
                         }
@@ -631,6 +652,13 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         cannonUp = 0
         wingUp = 0
         hullUp = 0
+        droneUp = 0
+        coreUp = 0
+        shieldGenTimer = 0f
+        slowTimer = 0f
+        magnetTimer = 0f
+        cloneTimer = 0f
+        droneFireTimer = 0f
         camX = 0f
         screenPunch = 0f
         ambR = 0f
@@ -754,6 +782,32 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         tripleTimer -= dt
         sectorBannerTimer -= dt
         damagePulse = (damagePulse - dt * 2f).coerceAtLeast(0f)
+        slowTimer = (slowTimer - dt).coerceAtLeast(0f)
+        magnetTimer = (magnetTimer - dt).coerceAtLeast(0f)
+        cloneTimer = (cloneTimer - dt).coerceAtLeast(0f)
+
+        // Shield generator core regenerates shield
+        if (coreUp == 1) {
+            if (shieldUp) shieldGenTimer = 12f
+            else {
+                shieldGenTimer -= dt
+                if (shieldGenTimer <= 0f) {
+                    shieldUp = true
+                    shieldGenTimer = 12f
+                    addFloat("ESCUDO REGENERADO!", playerX, playerY - 70 * scale, Color.rgb(111, 168, 255))
+                    flashAlpha = maxOf(flashAlpha, 0.18f)
+                }
+            }
+        }
+
+        // Drone escort fires at nearest invader
+        if (droneUp == 1) {
+            droneFireTimer -= dt
+            if (droneFireTimer <= 0f && invaders.any { it.alive }) {
+                fireDrone()
+                droneFireTimer = 0.62f
+            }
+        }
 
         // Battle combo decay
         comboTimer -= dt
@@ -769,6 +823,9 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         if (rapidTimer > 0f) { tr += 24f; tg += 12f }
         if (tripleTimer > 0f) { tb += 24f; tg += 8f }
         if (shieldUp) { tb += 28f; tg += 10f }
+        if (slowTimer > 0f) { tb += 34f; tg += 18f; tr += 8f }
+        if (magnetTimer > 0f) { tr += 22f; tg += 18f }
+        if (cloneTimer > 0f) { tr += 18f; tb += 22f }
         if (ufo != null) { tg += 14f; tb += 20f }
         if (lives <= 1) tr += 42f
         if (waveBannerTimer > 0f) { tg += 10f; tb += 16f }
@@ -782,7 +839,16 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             val alive = invaders.filter { it.alive && !it.diving && it.y > 0f }
             if (alive.isNotEmpty()) {
                 val bombers = alive.filter { it.variant == 4 }
-                val shooter = if (bombers.isNotEmpty() && Random.nextFloat() < 0.45f) bombers.random() else alive.random()
+                val snipers = alive.filter { it.variant == 7 }
+                val shooter = when {
+                    bombers.isNotEmpty() && Random.nextFloat() < 0.40f -> bombers.random()
+                    snipers.isNotEmpty() && Random.nextFloat() < 0.35f -> snipers.random()
+                    else -> {
+                        // Swarmers rarely shoot - filter them mostly out
+                        val nonSwarm = alive.filter { it.variant != 8 }
+                        if (nonSwarm.isNotEmpty() && Random.nextFloat() < 0.85f) nonSwarm.random() else alive.random()
+                    }
+                }
                 if (shooter.variant == 4) {
                     // Bomber drops a 3-shot cluster fan
                     val speed = (380f + wave * 14f) * scale
@@ -792,6 +858,16 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                                 Color.rgb(255, 140, 60), sin(a) * speed)
                         )
                     }
+                } else if (shooter.variant == 7) {
+                    // Sniper: single high-velocity precise shot
+                    val speed = 720f * scale
+                    var vx = 0f
+                    // More accurate aim
+                    val travel = (shooter.y - playerY) / speed
+                    if (travel > 0f) vx = ((playerX - shooter.x) / travel * 0.9f).coerceIn(-260f * scale, 260f * scale)
+                    enemyBullets.add(Bullet(shooter.x, shooter.y + shooter.size, speed, Color.rgb(255, 230, 120), vx))
+                    // Muzzle flash
+                    spawnSparks(shooter.x, shooter.y + shooter.size, Color.rgb(255, 230, 120), 3, true)
                 } else {
                     fireAimed(shooter)
                 }
@@ -848,6 +924,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
     private fun updateInvaders(dt: Float) {
         if (invaders.isEmpty()) return
+        val sdt = if (slowTimer > 0f) dt * 0.38f else dt
         val speed = (60f + wave * 24f) * scale
         val descendRate = (9f + wave * 2.4f) * scale
 
@@ -880,24 +957,28 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                     formDirX < 0 && minX + formOffX - maxHalf < 50 * scale -> 1f
                     else -> formDirX
                 }
-                formOffX += formDirX * speed * dt
+                formOffX += formDirX * speed * sdt
             }
 
             for (inv in invaders) {
                 if (!inv.alive || inv.diving) continue
                 inv.pulse += dt * 6f
                 inv.x = inv.homeX + formOffX
-                inv.homeY += descendRate * dt
+                inv.homeY += descendRate * sdt
                 inv.y = inv.homeY
                 // Hunters strafe inside the formation AND dodge incoming fire
                 if (inv.variant == 3) {
-                    inv.x += sin(inv.pulse * 1.3f) * 42f * scale
+                    inv.x += sin(inv.pulse * 1.3f) * 42f * scale * (if (slowTimer > 0f) 0.38f else 1f)
                     for (pb in bullets) {
                         if (abs(pb.x - inv.x) < 46f * scale && pb.y < inv.y && inv.y - pb.y < 240f * scale) {
-                            inv.x += (if (inv.x < pb.x) -1f else 1f) * 90f * scale * dt
+                            inv.x += (if (inv.x < pb.x) -1f else 1f) * 90f * scale * sdt
                             break
                         }
                     }
+                }
+                if (inv.variant == 8) {
+                    inv.x += sin(inv.pulse * 3.6f) * 30f * scale
+                    inv.y += cos(inv.pulse * 3.6f) * 8f * scale
                 }
                 maxY = maxOf(maxY, inv.y)
             }
@@ -908,10 +989,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             for (inv in invaders) {
                 if (!inv.alive || !inv.diving) continue
                 inv.pulse += dt * 12f
-                inv.divePhase += dt * 5f
-                inv.y += (330f + wave * 22f) * scale * dt
-                inv.x += sin(inv.divePhase) * 170f * scale * dt
-                inv.x += kotlin.math.sign(playerX - inv.x) * 70f * scale * dt
+                inv.divePhase += sdt * 5f
+                inv.y += (330f + wave * 22f) * scale * sdt
+                inv.x += sin(inv.divePhase) * 170f * scale * sdt
+                inv.x += kotlin.math.sign(playerX - inv.x) * 70f * scale * sdt
                 inv.x = inv.x.coerceIn(inv.size, w - inv.size)
                 if (Random.nextFloat() < dt * 30f) {
                     spawnSparks(inv.x, inv.y - inv.size * 0.4f, inv.color, count = 1, small = true, spreadUp = true)
@@ -937,14 +1018,15 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             }
         }
     }
-
-    private fun updateUfo(dt: Float) {        val current = ufo
+    private fun updateUfo(dt: Float) {
+        val sdt = if (slowTimer > 0f) dt * 0.38f else dt
+        val current = ufo
         if (current != null) {
-            current.x += current.vx * dt
+            current.x += current.vx * sdt
             current.blink += dt * 8f
             if (current.x < -150 * scale || current.x > w + 150 * scale) ufo = null
         } else {
-            ufoTimer -= dt
+            ufoTimer -= sdt
             if (ufoTimer <= 0f) {
                 val fromLeft = Random.nextBoolean()
                 ufo = Ufo(
@@ -961,41 +1043,43 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
     private fun updateBoss(dt: Float) {
         val b = boss ?: return
+        val sdt = if (slowTimer > 0f) dt * 0.38f else dt
         b.pulse += dt * 4f
         if (b.dying) {
-            // Death throes: drifts and shakes, handled by the cinematic clock
-            b.y += 14f * scale * dt
+            b.y += 14f * scale * sdt
             return
         }
         if (b.entering) {
-            b.y += (h * 0.18f - b.y) * min(2f * dt, 1f)
+            b.y += (h * 0.18f - b.y) * min(2f * sdt, 1f)
             if (abs(b.y - h * 0.18f) < 8f * scale) b.entering = false
             return
         }
 
         val enraged = b.hp <= b.maxHp / 3
         val speedMul = if (enraged) 1.35f else 1f
-        b.timer -= dt * speedMul
-        b.cycle -= dt
+        b.timer -= sdt * speedMul
+        b.cycle -= sdt
 
         when (b.phase) {
-            0 -> { // Sweep + aimed volleys
-                b.x += b.vx * (90f + wave * 5f) * scale * dt * speedMul
+            0 -> { // Sweep + aimed volleys - pattern varies by boss type
+                val typeSpeed = when (b.type) { 1 -> 0.8f; 2 -> 1.4f; else -> 0.9f }
+                b.x += b.vx * (90f + wave * 5f) * typeSpeed * scale * sdt * speedMul
                 if (b.x < 160f * scale) { b.x = 160f * scale; b.vx = 1f }
                 if (b.x > w - 160f * scale) { b.x = w - 160f * scale; b.vx = -1f }
                 if (b.timer <= 0f) {
                     fireBossVolley(b)
-                    b.timer = 1.7f
+                    b.timer = when (b.type) { 1 -> 1.5f; 2 -> 1.0f; else -> 1.8f }
                 }
             }
             1 -> { // Rotating spiral barrage
-                b.spiral += dt * 2.2f * speedMul
+                val spin = when (b.type) { 1 -> 1.6f; 2 -> 2.9f; else -> 2.1f }
+                b.spiral += sdt * spin * speedMul
                 if (b.timer <= 0f) {
                     fireBossSpiral(b)
-                    b.timer = 0.42f
+                    b.timer = when (b.type) { 1 -> 0.48f; 2 -> 0.30f; else -> 0.42f }
                 }
             }
-            else -> { // Summon minions
+            else -> { // Summon minions - type determines variant
                 if (b.timer <= 0f) {
                     summonMinions(b)
                     b.phase = 0
@@ -1006,44 +1090,51 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
         if (b.cycle <= 0f) {
             b.phase = (b.phase + 1) % 3
-            b.timer = if (b.phase == 2) 0.6f else 1.4f
-            b.cycle = 8f
+            b.timer = if (b.phase == 2) 0.6f else 1.3f
+            b.cycle = when (b.type) { 2 -> 6.5f; else -> 8f }
         }
     }
 
     private fun fireBossVolley(b: Boss) {
         val speed = (380f + wave * 10f) * scale
+        val col = when (b.type) { 1 -> Color.rgb(120, 230, 255); 2 -> Color.rgb(255, 140, 60); else -> Color.rgb(255, 70, 170) }
         for (a in floatArrayOf(-0.28f, 0f, 0.28f)) {
             enemyBullets.add(
-                Bullet(b.x + a * 160f * scale, b.y + 80f * scale, speed,
-                    Color.rgb(255, 70, 170), sin(a) * speed * 0.8f)
+                Bullet(b.x + a * 160f * scale, b.y + 80f * scale, speed, col, sin(a) * speed * 0.8f)
             )
         }
     }
 
     private fun fireBossSpiral(b: Boss) {
-        val speed = 250f * scale
+        val speed = when (b.type) { 2 -> 300f; else -> 250f } * scale
+        val col = when (b.type) { 1 -> Color.rgb(180, 240, 255); 2 -> Color.rgb(255, 180, 90); else -> Color.rgb(255, 120, 220) }
         for (i in 0 until 6) {
             val angle = b.spiral + i * (Math.PI.toFloat() / 3f)
             enemyBullets.add(
-                Bullet(b.x, b.y + 40f * scale, abs(sin(angle)) * speed + 60f * scale,
-                    Color.rgb(255, 120, 220), cos(angle) * speed)
+                Bullet(b.x, b.y + 40f * scale, abs(sin(angle)) * speed + 60f * scale, col, cos(angle) * speed)
             )
         }
     }
 
     private fun summonMinions(b: Boss) {
-        repeat(3) { i ->
-            val variant = if (i % 2 == 0) 0 else 1
+        val variants = when (b.type) {
+            1 -> intArrayOf(2, 2, 1) // Glacial: armored + squid
+            2 -> intArrayOf(4, 3, 4) // Vulcanico: bombers + hunter
+            else -> intArrayOf(0, 1, 5) // Nebulosa: crab, squid, splitter
+        }
+        for (i in variants.indices) {
+            val variant = variants[i]
             invaders.add(
                 Invader(
-                    homeX = b.x + (i - 1f) * 100f * scale, homeY = b.y + 120f * scale,
-                    x = b.x + (i - 1f) * 100f * scale, y = b.y,
-                    size = 30f * scale, color = invaderColor(variant), variant = variant, hp = 1
+                    homeX = b.x + (i - 1f) * 110f * scale, homeY = b.y + 120f * scale,
+                    x = b.x + (i - 1f) * 110f * scale, y = b.y,
+                    size = if (variant == 4) 36f * scale else 30f * scale,
+                    color = invaderColor(variant), variant = variant,
+                    hp = if (variant == 4) 3 else 1
                 )
             )
         }
-        addFloat("REFUERÇOS!", b.x, b.y + 140f * scale, Color.rgb(255, 120, 220))
+        addFloat("REFUERÇOS!", b.x, b.y + 140f * scale, when (b.type) { 1 -> Color.rgb(120, 230, 255); 2 -> Color.rgb(255, 140, 60); else -> Color.rgb(255, 120, 220) })
     }
 
     /** Boss defeat starts a staged cinematic; loot drops when it ends. */
@@ -1148,6 +1239,17 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         return best
     }
 
+    private fun fireDrone() {
+        val target = invaders.filter { it.alive }.minByOrNull { hypot(it.x - playerX, it.y - playerY) } ?: boss ?: return
+        val tx = target.let { when (it) { is Invader -> it.x; is Boss -> it.x; else -> playerX } }
+        // Drone hovers slightly behind-left of player
+        val dx = playerX - 48f * scale
+        val dy = playerY - 20f * scale
+        val angle = kotlin.math.atan2(target.let { when (it) { is Invader -> it.y; is Boss -> it.y; else -> playerY } } - dy, tx - dx)
+        bullets.add(Bullet(dx, dy, 1050f * scale, Color.rgb(180, 210, 255), cos(angle) * 320f * scale))
+        spawnSparks(dx, dy, Color.rgb(180, 210, 255), 2, true)
+    }
+
     private fun updateBullets(dt: Float) {
         bullets.removeAll { b ->
             if (b.homing) {
@@ -1166,9 +1268,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             if (b.trail.size > 6) b.trail.removeAt(b.trail.size - 1)
             b.y < -60f
         }
+        val esdt = if (slowTimer > 0f) dt * 0.38f else dt
         enemyBullets.removeAll { b ->
-            b.x += b.vx * dt
-            b.y += b.speed * dt
+            b.x += b.vx * esdt
+            b.y += b.speed * esdt
             b.y > h + 50f || b.y < -90f || b.x < -50f || b.x > w + 50f
         }
     }
@@ -1200,7 +1303,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         comboTimer = 2f
         specialCharge = (specialCharge + 4f).coerceAtMost(100f)
         val base = when (inv.variant) {
-            2 -> 40; 3 -> 35; 4 -> 60; 5 -> 25; 0 -> 30; else -> 20
+            2 -> 40; 3 -> 35; 4 -> 60; 5 -> 25; 0 -> 30; 6 -> 45; 7 -> 50; 8 -> 15; else -> 20
         }
         val mult = 1 + combo / 5
         addScore(base * mult)
@@ -1394,6 +1497,9 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                 }
             }
         }
+        if (cloneTimer > 0f) {
+            bullets.add(Bullet(playerX - 58f * scale, playerY - playerW, 1050f * scale, Color.rgb(180, 160, 255)))
+        }
         spawnSparks(playerX, playerY - playerW, Color.rgb(120, 255, 200), count = 4, small = true, spreadUp = true)
     }
 
@@ -1402,14 +1508,17 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private fun rollPowerType(): PowerType {
         val r = Random.nextFloat()
         return when {
-            r < 0.20f -> PowerType.RAPID
-            r < 0.38f -> PowerType.TRIPLE
-            r < 0.52f -> PowerType.SHIELD
-            r < 0.62f -> PowerType.LIFE
-            r < 0.72f -> PowerType.NOVA
-            r < 0.82f -> PowerType.PART
-            r < 0.91f -> PowerType.WEAPON
-            else -> PowerType.ARMOR
+            r < 0.16f -> PowerType.RAPID
+            r < 0.30f -> PowerType.TRIPLE
+            r < 0.42f -> PowerType.SHIELD
+            r < 0.52f -> PowerType.LIFE
+            r < 0.60f -> PowerType.NOVA
+            r < 0.68f -> PowerType.PART
+            r < 0.76f -> PowerType.WEAPON
+            r < 0.82f -> PowerType.ARMOR
+            r < 0.88f -> PowerType.SLOW
+            r < 0.94f -> PowerType.MAGNET
+            else -> PowerType.CLONE
         }
     }
 
@@ -1422,6 +1531,9 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         PowerType.PART -> Color.rgb(255, 216, 120)
         PowerType.WEAPON -> Color.rgb(170, 255, 245)
         PowerType.ARMOR -> Color.rgb(150, 170, 225)
+        PowerType.SLOW -> Color.rgb(120, 200, 255)
+        PowerType.MAGNET -> Color.rgb(255, 220, 80)
+        PowerType.CLONE -> Color.rgb(200, 160, 255)
     }
 
     private fun updatePowerUps(dt: Float) {
@@ -1430,6 +1542,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             p.phase += dt * 3f
             p.y += 130f * scale * dt
             p.x += sin(p.phase) * 42f * scale * dt
+            if (magnetTimer > 0f) {
+                p.x += (playerX - p.x) * 0.09f
+                p.y += (playerY - p.y) * 0.09f
+            }
             p.x = p.x.coerceIn(30f * scale, w - 30f * scale)
             if (p.y > h + 50f * scale) return@removeAll true
             // Pickup?
@@ -1489,6 +1605,18 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                 armor = (armor + 2).coerceAtMost(4)
                 addFloat("BLINDAGEM +$armor", playerX, playerY - 80 * scale, powerColor(PowerType.ARMOR))
             }
+            PowerType.SLOW -> {
+                slowTimer = 5f
+                addFloat("TEMPO LENTO! 5s", playerX, playerY - 80 * scale, powerColor(PowerType.SLOW))
+            }
+            PowerType.MAGNET -> {
+                magnetTimer = 8f
+                addFloat("IMÃ CÓSMICO! 8s", playerX, playerY - 80 * scale, powerColor(PowerType.MAGNET))
+            }
+            PowerType.CLONE -> {
+                cloneTimer = 8f
+                addFloat("CLONE ATIVO! 8s", playerX, playerY - 80 * scale, powerColor(PowerType.CLONE))
+            }
         }
         shake = maxOf(shake, 5f)
     }
@@ -1500,6 +1628,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         if (cannonUp < 2) options.add(1)
         if (wingUp < 2) options.add(2)
         if (hullUp < 2) options.add(3)
+        if (droneUp < 1) options.add(4)
+        if (coreUp < 1) options.add(5)
         if (options.isEmpty()) {
             addScore(250)
             addFloat("SISTEMAS NO MÁXIMO +250", playerX, playerY - 80 * scale, powerColor(PowerType.PART))
@@ -1509,7 +1639,9 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             0 -> { engineUp++; addFloat("MOTOR IÔNICO Nv$engineUp", playerX, playerY - 80 * scale, Color.rgb(255, 170, 60)) }
             1 -> { cannonUp++; addFloat("CANHÃO DE PLASMA Nv$cannonUp", playerX, playerY - 80 * scale, Color.rgb(120, 255, 200)) }
             2 -> { wingUp++; addFloat("ASAS DE COMBATE Nv$wingUp", playerX, playerY - 80 * scale, Color.rgb(89, 229, 255)) }
-            else -> { hullUp++; shieldUp = true; addFloat("CASCO REFORÇADO Nv$hullUp", playerX, playerY - 80 * scale, Color.rgb(111, 168, 255)) }
+            3 -> { hullUp++; shieldUp = true; addFloat("CASCO REFORÇADO Nv$hullUp", playerX, playerY - 80 * scale, Color.rgb(111, 168, 255)) }
+            4 -> { droneUp = 1; addFloat("DRONE ESCOLTA!", playerX, playerY - 80 * scale, Color.rgb(180, 200, 255)) }
+            else -> { coreUp = 1; shieldGenTimer = 12f; addFloat("NÚCLEO DE FUSÃO!", playerX, playerY - 80 * scale, Color.rgb(255, 220, 120)) }
         }
         flashAlpha = maxOf(flashAlpha, 0.25f)
         shake = maxOf(shake, 8f)
@@ -1691,6 +1823,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                     drawInvaders(canvas)
                     drawPowerUps(canvas)
                     drawPlayer(canvas)
+                    if (droneUp == 1) drawDrone(canvas)
+                    if (cloneTimer > 0f) drawClone(canvas)
                     drawBullets(canvas)
                 }
                 State.GAME_OVER -> drawGameOver(canvas)
@@ -2119,6 +2253,43 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         canvas.restore()
     }
 
+    private fun drawDrone(canvas: Canvas) {
+        val x = playerX - 54f * scale + sin(bgTime * 4f) * 8f * scale
+        val y = playerY - 18f * scale + cos(bgTime * 5f) * 6f * scale
+        setShadow(Color.rgb(180, 210, 255))
+        fillPaint.color = Color.rgb(180, 210, 255)
+        val dHalf = 18f * scale
+        val path = Path().apply {
+            moveTo(x, y - dHalf)
+            lineTo(x - dHalf * 0.7f, y + dHalf * 0.6f)
+            lineTo(x, y + dHalf * 0.2f)
+            lineTo(x + dHalf * 0.7f, y + dHalf * 0.6f)
+            close()
+        }
+        canvas.drawPath(path, fillPaint)
+        setShadow(null)
+        fillPaint.color = Color.WHITE
+        canvas.drawCircle(x, y - 2f * scale, 3f * scale, fillPaint)
+    }
+
+    private fun drawClone(canvas: Canvas) {
+        val x = playerX - 62f * scale
+        val y = playerY - 4f * scale
+        fillPaint.style = Paint.Style.FILL
+        fillPaint.color = Color.argb((90 + sin(bgTime * 6f) * 40).toInt().coerceIn(0, 255), 200, 160, 255)
+        setShadow(Color.rgb(200, 160, 255))
+        val half = playerW * 0.7f
+        val path = Path().apply {
+            moveTo(x, y - half * 0.9f)
+            lineTo(x - half * 0.7f, y + half * 0.6f)
+            lineTo(x, y + half * 0.25f)
+            lineTo(x + half * 0.7f, y + half * 0.6f)
+            close()
+        }
+        canvas.drawPath(path, fillPaint)
+        setShadow(null)
+    }
+
     private fun drawShadowEllipse(canvas: Canvas, x: Float, y: Float, rx: Float, ry: Float) {
         fillPaint.shader = null
         setShadow(null)
@@ -2136,7 +2307,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                 2 -> drawArmored(canvas, inv)
                 3 -> drawHunter(canvas, inv)
                 4 -> drawBomber(canvas, inv)
-                else -> drawSquid(canvas, inv)
+                5 -> drawSquid(canvas, inv)
+                6 -> drawShieldBearer(canvas, inv)
+                7 -> drawSniper(canvas, inv)
+                else -> drawSwarmer(canvas, inv)
             }
         }
         setShadow(null)
@@ -2210,6 +2384,82 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         for (i in 0 until inv.hp) {
             canvas.drawCircle(inv.x - s * 0.3f + i * s * 0.3f, inv.y - s * 0.35f, s * 0.07f, fillPaint)
         }
+    }
+
+    private fun drawShieldBearer(canvas: Canvas, inv: Invader) {
+        val s = inv.size
+        drawShadowRect(canvas, inv.x, inv.y, s * 0.9f, s * 0.5f)
+        // Ice hull
+        fillPaint.style = Paint.Style.FILL
+        fillPaint.shader = RadialGradient(
+            inv.x - s * 0.25f, inv.y - s * 0.2f, s * 1.1f,
+            intArrayOf(shade(inv.color, 1.5f), inv.color, shade(inv.color, 0.45f)),
+            floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP
+        )
+        setShadow(inv.color)
+        canvas.drawRoundRect(inv.x - s * 0.85f, inv.y - s * 0.5f, inv.x + s * 0.85f, inv.y + s * 0.35f, s * 0.35f, s * 0.35f, fillPaint)
+        fillPaint.shader = null
+        setShadow(null)
+        // Frontal energy shield - pulsating arc
+        val pulse = 0.6f + sin(inv.pulse * 2f) * 0.4f
+        fillPaint.style = Paint.Style.STROKE
+        fillPaint.strokeWidth = 4f * scale
+        fillPaint.color = Color.argb((110 + pulse * 90).toInt(), 120, 210, 255)
+        canvas.drawArc(inv.x - s * 1.15f, inv.y - s * 0.85f, inv.x + s * 1.15f, inv.y + s * 1.05f, 200f, 140f, false, fillPaint)
+        fillPaint.style = Paint.Style.FILL
+        fillPaint.color = Color.argb((28 + pulse * 22).toInt(), 120, 210, 255)
+        canvas.drawArc(inv.x - s * 1.15f, inv.y - s * 0.85f, inv.x + s * 1.15f, inv.y + s * 1.05f, 200f, 140f, true, fillPaint)
+        // HP pips
+        fillPaint.color = Color.WHITE
+        for (i in 0 until inv.hp) canvas.drawCircle(inv.x - s * 0.22f + i * s * 0.22f, inv.y - s * 0.32f, s * 0.06f, fillPaint)
+    }
+
+    private fun drawSniper(canvas: Canvas, inv: Invader) {
+        val s = inv.size
+        drawShadowRect(canvas, inv.x, inv.y, s * 0.5f, s * 0.6f)
+        setShadow(inv.color)
+        fillPaint.style = Paint.Style.FILL
+        fillPaint.color = inv.color
+        // Slender body
+        canvas.drawRoundRect(inv.x - s * 0.32f, inv.y - s * 0.6f, inv.x + s * 0.32f, inv.y + s * 0.15f, s * 0.18f, s * 0.18f, fillPaint)
+        // Long barrel
+        fillPaint.color = shade(inv.color, 0.55f)
+        canvas.drawRect(inv.x - s * 0.08f, inv.y + s * 0.15f, inv.x + s * 0.08f, inv.y + s * 0.95f, fillPaint)
+        // Scope lens
+        fillPaint.color = Color.BLACK
+        canvas.drawCircle(inv.x, inv.y - s * 0.38f, s * 0.14f, fillPaint)
+        // Charging glow at tip - pulses with phase
+        val charge = (sin(inv.pulse * 1.8f) * 0.5f + 0.5f)
+        if (charge > 0.6f) {
+            setShadow(Color.rgb(255, 240, 120))
+            fillPaint.color = Color.argb((charge * 200).toInt(), 255, 240, 120)
+            canvas.drawCircle(inv.x, inv.y + s * 0.95f, s * (0.12f + charge * 0.08f), fillPaint)
+            setShadow(inv.color)
+        } else setShadow(null)
+    }
+
+    private fun drawSwarmer(canvas: Canvas, inv: Invader) {
+        val s = inv.size
+        drawShadowCircle(canvas, inv.x, inv.y, s * 0.55f)
+        setShadow(inv.color)
+        fillPaint.style = Paint.Style.FILL
+        // Fluttering wings - alpha pulse
+        val flap = sin(inv.pulse * 4f) * s * 0.25f
+        fillPaint.color = shade(inv.color, 1.3f)
+        fillPaint.alpha = 140
+        canvas.drawOval(inv.x - s * 0.95f, inv.y - s * 0.15f + flap, inv.x - s * 0.15f, inv.y + s * 0.35f - flap, fillPaint)
+        canvas.drawOval(inv.x + s * 0.15f, inv.y - s * 0.15f - flap, inv.x + s * 0.95f, inv.y + s * 0.35f + flap, fillPaint)
+        fillPaint.alpha = 255
+        fillPaint.color = inv.color
+        canvas.drawCircle(inv.x, inv.y, s * 0.5f, fillPaint)
+        setShadow(null)
+        // Two beady eyes
+        fillPaint.color = Color.BLACK
+        canvas.drawCircle(inv.x - s * 0.14f, inv.y - s * 0.08f, s * 0.08f, fillPaint)
+        canvas.drawCircle(inv.x + s * 0.14f, inv.y - s * 0.08f, s * 0.08f, fillPaint)
+        fillPaint.color = Color.WHITE
+        canvas.drawCircle(inv.x - s * 0.12f, inv.y - s * 0.11f, s * 0.03f, fillPaint)
+        canvas.drawCircle(inv.x + s * 0.16f, inv.y - s * 0.11f, s * 0.03f, fillPaint)
     }
 
     private fun drawCrab(canvas: Canvas, inv: Invader) {
@@ -2640,19 +2890,19 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         val s = 100f * scale
         drawShadowEllipse(canvas, b.x, b.y + s * 0.2f, s * 1.3f, s * 0.3f)
 
-        // Menacing hull
+        // Menacing hull - palette per sector
+        val hullCols = when (b.type) {
+            1 -> intArrayOf(Color.rgb(45, 90, 130), Color.rgb(18, 48, 90), Color.rgb(6, 18, 40)) // Glacial
+            2 -> intArrayOf(Color.rgb(130, 45, 20), Color.rgb(90, 22, 12), Color.rgb(40, 10, 6)) // Vulcanico
+            else -> intArrayOf(Color.rgb(90, 45, 130), Color.rgb(40, 18, 66), Color.rgb(12, 6, 22))
+        }
+        val glowCol = when (b.type) { 1 -> Color.rgb(120, 230, 255); 2 -> Color.rgb(255, 140, 60); else -> Color.rgb(255, 80, 180) }
         fillPaint.style = Paint.Style.FILL
         fillPaint.shader = LinearGradient(
-            b.x, b.y - s * 0.6f, b.x, b.y + s * 0.6f,
-            intArrayOf(
-                Color.rgb(90, 45, 130),
-                Color.rgb(40, 18, 66),
-                Color.rgb(12, 6, 22)
-            ),
-            floatArrayOf(0f, 0.5f, 1f),
-            Shader.TileMode.CLAMP
+            b.x, b.y - s * 0.6f, b.x, b.y + s * 0.6f, hullCols,
+            floatArrayOf(0f, 0.5f, 1f), Shader.TileMode.CLAMP
         )
-        setShadow(Color.rgb(255, 80, 180))
+        setShadow(glowCol)
         canvas.drawOval(b.x - s * 1.3f, b.y - s * 0.5f, b.x + s * 1.3f, b.y + s * 0.55f, fillPaint)
         fillPaint.shader = null
         setShadow(null)
@@ -2664,10 +2914,11 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         }
 
         // Pulsing weak-point core
+        val coreCol = when (b.type) { 1 -> Color.rgb(120, 230, 255); 2 -> Color.rgb(255, 170, 60); else -> Color.rgb(255, 110, 200) }
         val corePulse = 0.7f + sin(b.pulse * 2f) * 0.3f
         fillPaint.shader = RadialGradient(
             b.x, b.y, s * 0.4f,
-            intArrayOf(Color.WHITE, Color.rgb(255, 110, 200), Color.TRANSPARENT),
+            intArrayOf(Color.WHITE, coreCol, Color.TRANSPARENT),
             floatArrayOf(0f, 0.45f, 1f),
             Shader.TileMode.CLAMP
         )
@@ -2772,6 +3023,9 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                 PowerType.PART -> "P"
                 PowerType.WEAPON -> "W"
                 PowerType.ARMOR -> "A"
+                PowerType.SLOW -> "Z"
+                PowerType.MAGNET -> "M"
+                PowerType.CLONE -> "C"
             }
             canvas.drawText(glyph, p.x, bobY + s * 0.42f, textPaint)
             textPaint.textAlign = Paint.Align.LEFT
@@ -2919,15 +3173,28 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             textPaint.color = Color.rgb(170, 205, 255)
             canvas.drawText("SHIELD", 30f + barH * 1.4f, barY + barH, textPaint)
             textPaint.color = Color.WHITE
+            barY += barH + 7f * scale
+        }
+        if (slowTimer > 0f) {
+            drawPowerBar(canvas, 30f, barY, barW, barH, slowTimer / 5f, powerColor(PowerType.SLOW), "LENTO")
+            barY += barH + 7f * scale
+        }
+        if (magnetTimer > 0f) {
+            drawPowerBar(canvas, 30f, barY, barW, barH, magnetTimer / 8f, powerColor(PowerType.MAGNET), "IMA")
+            barY += barH + 7f * scale
+        }
+        if (cloneTimer > 0f) {
+            drawPowerBar(canvas, 30f, barY, barW, barH, cloneTimer / 8f, powerColor(PowerType.CLONE), "CLONE")
+            barY += barH + 7f * scale
         }
 
         // Installed modules pips (bottom-left)
-        if (engineUp + cannonUp + wingUp + hullUp > 0) {
-            textPaint.textSize = 22f * scale
+        if (engineUp + cannonUp + wingUp + hullUp + droneUp + coreUp > 0) {
+            textPaint.textSize = 20f * scale
             textPaint.setShadowLayer(6f, 0f, 0f, Color.rgb(255, 216, 120))
             textPaint.color = Color.rgb(255, 216, 120)
             canvas.drawText(
-                "MOTOR $engineUp  CANHÃO $cannonUp  ASAS $wingUp  CASCO $hullUp",
+                "M $engineUp C $cannonUp W $wingUp H $hullUp D $droneUp N $coreUp",
                 30f, h - 18f * scale, textPaint
             )
             textPaint.color = Color.WHITE
@@ -3128,7 +3395,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         val alpha: Int
     )
 
-    private enum class PowerType { RAPID, TRIPLE, SHIELD, LIFE, NOVA, PART, WEAPON, ARMOR }
+    private enum class PowerType { RAPID, TRIPLE, SHIELD, LIFE, NOVA, PART, WEAPON, ARMOR, SLOW, MAGNET, CLONE }
 
     private class PowerUp(var x: Float, var y: Float, val type: PowerType, var phase: Float = Random.nextFloat() * 6f)
 
