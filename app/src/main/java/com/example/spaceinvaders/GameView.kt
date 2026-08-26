@@ -8,6 +8,10 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RadialGradient
 import android.graphics.Shader
+import android.media.AudioManager
+import android.media.ToneGenerator
+import android.os.VibrationEffect
+import android.os.Vibrator
 import android.util.Log
 import android.view.MotionEvent
 import android.view.SurfaceHolder
@@ -22,7 +26,7 @@ import kotlin.random.Random
 
 class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback, Runnable {
 
-    private enum class State { MENU, PLAYING, GAME_OVER }
+    private enum class State { MENU, PLAYING, GAME_OVER, SHOP }
 
     private var thread: Thread? = null
     @Volatile private var running = false
@@ -120,6 +124,26 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private var armor = 0
     private var combo = 0
     private var comboTimer = 0f
+    private var bestRank = 0 // 0=C 1=B 2=A 3=S
+    private var hordeModifier = 0 // 0=none 1=gravidade baixa 2=nevoa 3=enxame
+
+    // Loja e meta-progressao
+    private var coins = 0
+    private var selectedSkin = 0
+    private var ownedSkins = mutableSetOf(0)
+
+    // Armas secundarias
+    private var dashCooldown = 0f
+    private var mineCount = 1
+    private var mineTimer = 0f
+    private val mines = mutableListOf<Mine>()
+
+    // Som/vibracao
+    private var vibrator: Vibrator? = null
+    private var toneGenerator: ToneGenerator? = null
+
+    // Leaderboard top5
+    private var leaderboard = mutableListOf<Int>()
     private var boss: Boss? = null
     private var bossWave = false
     private var mission: Mission? = null
@@ -225,8 +249,60 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     init {
         holder.addCallback(this)
         focusable = FOCUSABLE
-        highScore = context.getSharedPreferences("space_invaders", Context.MODE_PRIVATE)
-            .getInt("highscore", 0)
+        val prefs = context.getSharedPreferences("space_invaders", Context.MODE_PRIVATE)
+        highScore = prefs.getInt("highscore", 0)
+        bestRank = prefs.getInt("bestRank", 0)
+        coins = prefs.getInt("coins", 0)
+        selectedSkin = prefs.getInt("selectedSkin", 0)
+        val ownedStr = prefs.getString("ownedSkins", "0") ?: "0"
+        ownedSkins = ownedStr.split(",").mapNotNull { it.toIntOrNull() }.toMutableSet()
+        if (ownedSkins.isEmpty()) ownedSkins.add(0)
+        val lbStr = prefs.getString("leaderboard", "") ?: ""
+        leaderboard = lbStr.split(",").mapNotNull { it.toIntOrNull() }.toMutableList()
+        if (leaderboard.isEmpty() && highScore > 0) leaderboard.add(highScore)
+        try {
+            vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+            toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 60)
+        } catch (_: Exception) {}
+    }
+
+    private fun saveCoinsAndSkins() {
+        context.getSharedPreferences("space_invaders", Context.MODE_PRIVATE).edit()
+            .putInt("coins", coins)
+            .putInt("selectedSkin", selectedSkin)
+            .putString("ownedSkins", ownedSkins.joinToString(","))
+            .apply()
+    }
+
+    private fun getSkinColors(skin: Int): IntArray = when (skin) {
+        1 -> intArrayOf(Color.rgb(255, 90, 90), Color.rgb(180, 30, 60), Color.rgb(90, 10, 30))
+        2 -> intArrayOf(Color.rgb(255, 220, 120), Color.rgb(200, 160, 60), Color.rgb(120, 90, 20))
+        else -> intArrayOf(Color.rgb(190, 255, 240), Color.rgb(0, 210, 175), Color.rgb(0, 90, 110))
+    }
+
+    private fun saveLeaderboard() {
+        val sorted = leaderboard.sortedDescending().take(5)
+        leaderboard = sorted.toMutableList()
+        context.getSharedPreferences("space_invaders", Context.MODE_PRIVATE).edit()
+            .putString("leaderboard", leaderboard.joinToString(","))
+            .apply()
+    }
+
+    private fun triggerVibration(light: Boolean) {
+        try {
+            val v = vibrator ?: return
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                v.vibrate(VibrationEffect.createOneShot(if (light) 50 else 120, VibrationEffect.DEFAULT_AMPLITUDE))
+            } else {
+                @Suppress("DEPRECATION") v.vibrate(if (light) 50 else 120)
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun playTone(success: Boolean) {
+        try {
+            toneGenerator?.startTone(if (success) ToneGenerator.TONE_PROP_BEEP else ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 120)
+        } catch (_: Exception) {}
     }
 
     private fun saveHighScore() {
@@ -235,7 +311,35 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             context.getSharedPreferences("space_invaders", Context.MODE_PRIVATE)
                 .edit().putInt("highscore", highScore).apply()
         }
+        leaderboard.add(score)
+        leaderboard = leaderboard.sortedDescending().take(5).toMutableList()
+        saveLeaderboard()
     }
+
+    private fun comboRank(): String = when {
+        combo >= 10 -> "S"
+        combo >= 6 -> "A"
+        combo >= 3 -> "B"
+        else -> "C"
+    }
+
+    private fun comboRankColor(): Int = when (comboRank()) {
+        "S" -> Color.rgb(255, 215, 0)
+        "A" -> Color.rgb(255, 80, 80)
+        "B" -> Color.rgb(90, 200, 255)
+        else -> Color.rgb(180, 180, 180)
+    }
+
+    private fun updateBestRank() {
+        val v = when (comboRank()) { "S" -> 3; "A" -> 2; "B" -> 1; else -> 0 }
+        if (v > bestRank) {
+            bestRank = v
+            context.getSharedPreferences("space_invaders", Context.MODE_PRIVATE)
+                .edit().putInt("bestRank", bestRank).apply()
+        }
+    }
+
+    private fun bestRankLabel(): String = when (bestRank) { 3 -> "S"; 2 -> "A"; 1 -> "B"; else -> "C" }
 
     // ---------- Lifecycle ----------
 
@@ -482,6 +586,44 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         }
     }
 
+    private fun updateMines(isSlow: Boolean, dt: Float) {
+        val iter = mines.iterator()
+        while (iter.hasNext()) {
+            val m = iter.next()
+            m.timer -= dt * (if (isSlow) 0.38f else 1f)
+            m.pulse += dt * 5f
+            // contato com invasor
+            var exploded = false
+            for (inv in invaders.toList()) {
+                if (!inv.alive) continue
+                if (hypot(inv.x - m.x, inv.y - m.y) < inv.size + 30f * scale) {
+                    exploded = true
+                    break
+                }
+            }
+            val b = boss
+            if (!exploded && b != null && hypot(b.x - m.x, b.y - m.y) < 120f * scale) exploded = true
+            if (exploded || m.timer <= 0f) {
+                // explosao
+                explode(m.x, m.y, Color.rgb(255, 180, 60), big = true)
+                // dano em area
+                for (inv in invaders.toList()) {
+                    if (inv.alive && hypot(inv.x - m.x, inv.y - m.y) < 140f * scale) {
+                        damageInvader(inv, 2)
+                    }
+                }
+                if (b != null && hypot(b.x - m.x, b.y - m.y) < 150f * scale) {
+                    b.hp -= 6
+                    if (b.hp <= 0) bossDeath(b)
+                }
+                shake = maxOf(shake, 14f)
+                flashAlpha = maxOf(flashAlpha, 0.25f)
+                triggerVibration(false)
+                iter.remove()
+            }
+        }
+    }
+
     private fun updateDebris(dt: Float) {
         for (d in debris) {
             d.y += d.speed * dt
@@ -503,7 +645,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         5 -> Color.rgb(170, 255, 90)    // splitter - lime
         6 -> Color.rgb(100, 180, 255)   // shield bearer - ice blue
         7 -> Color.rgb(255, 220, 80)    // sniper - gold
-        else -> Color.rgb(255, 90, 130) // swarmer - hot pink
+        8 -> Color.rgb(255, 90, 130) // swarmer - hot pink
+        9 -> Color.rgb(120, 120, 130) // camuflado - cinza
+        10 -> Color.rgb(255, 120, 30) // rastro de fogo - laranja
+        else -> Color.rgb(255, 90, 130)
     }
 
     private fun setSector(index: Int) {
@@ -550,22 +695,49 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         sectorBannerTimer = 2f
         flashAlpha = maxOf(flashAlpha, 0.2f)
 
-        // Every 4th wave: MOTHERSHIP BOSS
-        if (wave % 4 == 0) {
-            bossWave = true
-            entering = false
-            val bossType = sectorIndex % 3
-            val bossNames = arrayOf("RAINHA NEBULOSA", "LEVIATA GLACIAL", "TITA VULCANICO")
-            boss = Boss(
-                x = w / 2f, y = -180f * scale,
-                maxHp = 42 + sectorIndex * 18 + wave * 2 + bossType * 8,
-                type = bossType
-            )
-            addFloat("ALERTA: ${bossNames[bossType]}!", w / 2f, h * 0.35f, sectors[sectorIndex].accent)
-            shake = maxOf(shake, 10f)
-            return
+        // Horda infinita após wave 12: modificadores aleatórios
+        if (wave > 12) {
+            hordeModifier = Random.nextInt(1, 4) // 1=gravidade baixa 2=névoa 3=enxame
+            waveBannerTimer = 2.2f
+            val modName = when (hordeModifier) { 1 -> "GRAVIDADE BAIXA"; 2 -> "NÉVOA"; else -> "ENXAME" }
+            addFloat("MODO HORDA: $modName", w / 2f, h * 0.35f, Color.rgb(255, 80, 80))
+            // Boss continua a cada 4 waves mesmo na horda, mas com modificador mantido
+            if (wave % 4 == 0) {
+                bossWave = true
+                entering = false
+                val bossType = if (sectorIndex == 3) 3 else sectorIndex % 3
+                val bossNames = arrayOf("RAINHA NEBULOSA", "LEVIATA GLACIAL", "TITA VULCANICO", "VACUO ETERNO")
+                val bossHp = if (bossType == 3) 50 + 20 * sectorIndex + 3 * wave else 42 + sectorIndex * 18 + wave * 2 + bossType * 8
+                boss = Boss(
+                    x = w / 2f, y = -180f * scale,
+                    maxHp = bossHp,
+                    type = bossType
+                )
+                addFloat("ALERTA: ${bossNames[bossType]}!", w / 2f, h * 0.35f, sectors[sectorIndex].accent)
+                shake = maxOf(shake, 10f)
+                return
+            }
+            bossWave = false
+        } else {
+            hordeModifier = 0
+            // Every 4th wave: MOTHERSHIP BOSS
+            if (wave % 4 == 0) {
+                bossWave = true
+                entering = false
+                val bossType = if (sectorIndex == 3) 3 else sectorIndex % 3
+                val bossNames = arrayOf("RAINHA NEBULOSA", "LEVIATA GLACIAL", "TITA VULCANICO", "VACUO ETERNO")
+                val bossHp = if (bossType == 3) 50 + 20 * sectorIndex + 3 * wave else 42 + sectorIndex * 18 + wave * 2 + bossType * 8
+                boss = Boss(
+                    x = w / 2f, y = -180f * scale,
+                    maxHp = bossHp,
+                    type = bossType
+                )
+                addFloat("ALERTA: ${bossNames[bossType]}!", w / 2f, h * 0.35f, sectors[sectorIndex].accent)
+                shake = maxOf(shake, 10f)
+                return
+            }
+            bossWave = false
         }
-        bossWave = false
 
         // Mission assignment
         if (mission == null) {
@@ -583,7 +755,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             }
         }
 
-        val cols = min(5 + wave / 2, 9)
+        var cols = min(5 + wave / 2, 9)
+        if (hordeModifier == 3) cols = min(cols + 2, 11) // enxame = cols+2
         val rows = min(3 + (wave - 1) / 2, 5)
         val marginX = w * 0.13f
         val spacingX = if (cols > 1) (w - marginX * 2) / (cols - 1) else 0f
@@ -592,7 +765,9 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             for (c in 0 until cols) {
                 var variant = r % 3
                 val roll = Random.nextFloat()
-                if (wave >= 6 && roll < 0.10f) variant = 8
+                if (wave >= 8 && roll < 0.12f) variant = 10
+                else if (wave >= 7 && roll < 0.12f) variant = 9
+                else if (wave >= 6 && roll < 0.10f) variant = 8
                 else if (wave >= 5 && roll < 0.19f) variant = 7
                 else if (wave >= 3 && roll < 0.30f) variant = 6
                 else if (wave >= 2 && roll < 0.40f) variant = 3
@@ -607,6 +782,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                     6 -> 44f
                     7 -> 32f
                     8 -> 22f
+                    9 -> 38f
+                    10 -> 40f
                     else -> 46f
                 }) * scale
                 invaders.add(
@@ -619,8 +796,9 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                         color = invaderColor(variant),
                         variant = variant,
                         hp = when (variant) {
-                            2, 6 -> 2
+                            2, 6, 9 -> 2
                             4 -> 3
+                            10 -> 1
                             else -> if (r == 0 && wave >= 4) 2 else 1
                         }
                     )
@@ -673,6 +851,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         armor = 0
         combo = 0
         comboTimer = 0f
+        hordeModifier = 0
         boss = null
         bossWave = false
         mission = null
@@ -685,6 +864,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         beams.clear()
         powerupsCollected = 0
         shipLevel = 1
+        dashCooldown = 0f
+        mineCount = 1
+        mineTimer = 0f
+        mines.clear()
         initDebris()
         spawnWave()
     }
@@ -694,7 +877,45 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
-                // Menu: JOGAR button
+                // SHOP state
+                if (state == State.SHOP) {
+                    val bh = 78f * scale
+                    val bwBack = 260f * scale
+                    val leftBack = w / 2f - bwBack / 2f
+                    val topBack = h * 0.88f
+                    if (event.x in leftBack..(leftBack + bwBack) && event.y in topBack..(topBack + bh)) {
+                        state = State.MENU
+                        return true
+                    }
+                    // grade de 3 skins
+                    val cardW = 280f * scale
+                    val cardH = 260f * scale
+                    val gap = 30f * scale
+                    val totalW = cardW * 3 + gap * 2
+                    val startX = w / 2f - totalW / 2f
+                    val startY = h * 0.32f
+                    for (i in 0..2) {
+                        val cx = startX + i * (cardW + gap) + cardW/2f
+                        val cy = startY + cardH/2f
+                        val btnY = startY + cardH - 52f * scale
+                        val btnW = 180f * scale
+                        val btnH = 48f * scale
+                        if (event.x in (cx - btnW/2f)..(cx + btnW/2f) && event.y in btnY..(btnY+btnH)) {
+                            if (ownedSkins.contains(i)) {
+                                selectedSkin = i
+                                saveCoinsAndSkins()
+                            } else if (coins >= 500) {
+                                coins -= 500
+                                ownedSkins.add(i)
+                                selectedSkin = i
+                                saveCoinsAndSkins()
+                            }
+                            return true
+                        }
+                    }
+                    return true
+                }
+                // Menu: JOGAR button and LOJA button
                 if (state == State.MENU) {
                     val bw = 340f * scale
                     val bh = 78f * scale
@@ -702,8 +923,45 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                     val top = h * 0.62f
                     if (event.x in left..(left + bw) && event.y in top..(top + bh)) {
                         resetRequested = true
+                        return true
+                    }
+                    // LOJA button below JOGAR
+                    val left2 = w / 2f - 260f * scale / 2f
+                    val top2 = h * 0.73f
+                    if (event.x in left2..(left2 + 260f*scale) && event.y in top2..(top2 + 58f*scale)) {
+                        state = State.SHOP
+                        return true
                     }
                     return true
+                }
+                // Secondary buttons in PLAYING (dash and mine) - bottom left
+                if (state == State.PLAYING) {
+                    val dashX = 70f * scale
+                    val dashY = h - 84f * scale
+                    if (hypot(event.x - dashX, event.y - dashY) < 52f * scale) {
+                        if (dashCooldown <= 0f) {
+                            dashCooldown = 2.5f
+                            invincible = 0.6f
+                            val dir = if (playerX < w/2f) 1f else -1f
+                            playerX = (playerX + dir * 180f * scale).coerceIn(playerW, w - playerW)
+                            targetX = playerX
+                            shake = maxOf(shake, 8f)
+                            triggerVibration(true)
+                            spawnSparks(playerX, playerY, Color.rgb(120, 255, 200), 10, true)
+                        }
+                        return true
+                    }
+                    val mineX = 170f * scale
+                    val mineY = h - 84f * scale
+                    if (hypot(event.x - mineX, event.y - mineY) < 52f * scale) {
+                        if (mineCount > 0) {
+                            mineCount--
+                            mineTimer = 6f
+                            mines.add(Mine(playerX, playerY - 20f * scale))
+                            triggerVibration(true)
+                        }
+                        return true
+                    }
                 }
                 // Special attack button (bottom-right)
                 val bx = w - 84f * scale
@@ -741,11 +999,12 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     // ---------- Update ----------
 
     private fun update(dt: Float) {
-        bgTime += dt
+        // bg reativo: pulsa mais forte com combo
+        bgTime += dt * (1f + combo * 0.08f)
         updateStars(dt)
 
-        // Menu: only the cosmos breathes
-        if (state == State.MENU) {
+        // Menu/Shop: only the cosmos breathes
+        if (state == State.MENU || state == State.SHOP) {
             updateMeteors(dt)
             updateDust(dt)
             updateDebris(dt)
@@ -790,6 +1049,14 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         slowTimer = (slowTimer - dt).coerceAtLeast(0f)
         magnetTimer = (magnetTimer - dt).coerceAtLeast(0f)
         cloneTimer = (cloneTimer - dt).coerceAtLeast(0f)
+        dashCooldown = (dashCooldown - dt).coerceAtLeast(0f)
+        mineTimer -= dt
+        if (mineTimer <= 0f && mineCount < 1) {
+            mineCount = 1
+            mineTimer = 0f
+        }
+        // Minas
+        updateMines(slowTimer > 0f, dt)
 
         // Shield generator core regenerates shield
         if (coreUp == 1) {
@@ -899,11 +1166,13 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
         // Wave cleared (boss must fall too)
         if (!entering && boss == null && !bossWave && invaders.none { it.alive }) {
-            // Perfect wave mission
             val m = mission
             if (m != null && m.kind == 3 && !damageTakenThisWave) missionProgress(3, 1)
             wave++
             addScore(100)
+            // recarrega mina a cada onda
+            mineCount = 1
+            mineTimer = 0f
             spawnWave()
         }
     }
@@ -931,7 +1200,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         if (invaders.isEmpty()) return
         val sdt = if (slowTimer > 0f) dt * 0.38f else dt
         val speed = (60f + wave * 24f) * scale
-        val descendRate = (9f + wave * 2.4f) * scale
+        var descendRate = (9f + wave * 2.4f) * scale
+        if (hordeModifier == 1) descendRate *= 0.5f // gravidade baixa
 
         if (entering) {
             var allSettled = true
@@ -984,6 +1254,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                 if (inv.variant == 8) {
                     inv.x += sin(inv.pulse * 3.6f) * 30f * scale
                     inv.y += cos(inv.pulse * 3.6f) * 8f * scale
+                }
+                if (inv.variant == 10) {
+                    // Rastro de fogo - particulas a cada frame
+                    if (Random.nextFloat() < 0.7f) spawnSparks(inv.x, inv.y + inv.size * 0.4f, Color.rgb(255, 120, 30), count = 1, small = true, spreadUp = false)
                 }
                 maxY = maxOf(maxY, inv.y)
             }
@@ -1059,6 +1333,17 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             if (abs(b.y - h * 0.18f) < 8f * scale) b.entering = false
             return
         }
+        // Tipo 3: Vazio - buraco negro puxa jogador
+        if (b.type == 3) {
+            playerX += (b.x - playerX) * 0.02f * scale * dt * 60f
+            targetX = playerX
+            playerX = playerX.coerceIn(playerW, w - playerW)
+            targetX = targetX.coerceIn(playerW, w - playerW)
+            // puxa tambem balas inimigas levemente
+            for (eb in enemyBullets) {
+                eb.x += (b.x - eb.x) * 0.015f
+            }
+        }
 
         val enraged = b.hp <= b.maxHp / 3
         val speedMul = if (enraged) 1.35f else 1f
@@ -1102,7 +1387,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
     private fun fireBossVolley(b: Boss) {
         val speed = (380f + wave * 10f) * scale
-        val col = when (b.type) { 1 -> Color.rgb(120, 230, 255); 2 -> Color.rgb(255, 140, 60); else -> Color.rgb(255, 70, 170) }
+        val col = when (b.type) { 1 -> Color.rgb(120, 230, 255); 2 -> Color.rgb(255, 140, 60); 3 -> Color.rgb(120, 40, 180); else -> Color.rgb(255, 70, 170) }
         for (a in floatArrayOf(-0.28f, 0f, 0.28f)) {
             enemyBullets.add(
                 Bullet(b.x + a * 160f * scale, b.y + 80f * scale, speed, col, sin(a) * speed * 0.8f)
@@ -1111,8 +1396,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     }
 
     private fun fireBossSpiral(b: Boss) {
-        val speed = when (b.type) { 2 -> 300f; else -> 250f } * scale
-        val col = when (b.type) { 1 -> Color.rgb(180, 240, 255); 2 -> Color.rgb(255, 180, 90); else -> Color.rgb(255, 120, 220) }
+        val speed = when (b.type) { 2 -> 300f; 3 -> 280f; else -> 250f } * scale
+        val col = when (b.type) { 1 -> Color.rgb(180, 240, 255); 2 -> Color.rgb(255, 180, 90); 3 -> Color.rgb(80, 30, 140); else -> Color.rgb(255, 120, 220) }
         for (i in 0 until 6) {
             val angle = b.spiral + i * (Math.PI.toFloat() / 3f)
             enemyBullets.add(
@@ -1306,12 +1591,18 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         explode(inv.x, inv.y, inv.color, big = true)
         combo++
         comboTimer = 2f
+        updateBestRank()
         specialCharge = (specialCharge + 4f).coerceAtMost(100f)
         val base = when (inv.variant) {
-            2 -> 40; 3 -> 35; 4 -> 60; 5 -> 25; 0 -> 30; 6 -> 45; 7 -> 50; 8 -> 15; else -> 20
+            2 -> 40; 3 -> 35; 4 -> 60; 5 -> 25; 0 -> 30; 6 -> 45; 7 -> 50; 8 -> 15; 9 -> 35; 10 -> 30; else -> 20
         }
         val mult = 1 + combo / 5
         addScore(base * mult)
+        // Loja: coins
+        coins += base * mult
+        saveCoinsAndSkins()
+        triggerVibration(true)
+        playTone(true)
         if (combo >= 3) addFloat("COMBO x$mult", inv.x, inv.y - inv.size * 2f, Color.rgb(255, 230, 120))
         missionProgress(0, 1)
         if (inv.diving) missionProgress(2, 1)
@@ -1413,6 +1704,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             addFloat("BLINDAGEM ABSORVEU", playerX, playerY - 80 * scale, Color.rgb(150, 170, 225))
             shake = maxOf(shake, 8f)
             damageTakenThisWave = true
+            triggerVibration(true)
+            playTone(false)
             return
         }
 
@@ -1427,16 +1720,21 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             )
             addFloat("ESCUDO QUEBRADO", playerX, playerY - 80 * scale, Color.rgb(111, 168, 255))
             shake = maxOf(shake, 8f)
+            triggerVibration(true)
+            playTone(false)
             return
         }
 
         explode(playerX, playerY, Color.rgb(0, 255, 180), big = true)
+        triggerVibration(false)
+        playTone(false)
         shake = 18f
         flashAlpha = 0.55f
         damagePulse = 1f
         screenPunch = 1f
         hitStop = maxOf(hitStop, 0.14f)
         damageTakenThisWave = true
+        combo = 0
         lives--
         if (lives <= 0 || instantDeath) {
             lives = 0
@@ -1729,6 +2027,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     // ---------- Particles ----------
 
     private fun explode(x: Float, y: Float, color: Int, big: Boolean = false, huge: Boolean = false) {
+        if (big || huge) triggerVibration(false) else triggerVibration(true)
         val count = when {
             huge -> 140
             big -> 46
@@ -1826,12 +2125,14 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                     drawUfo(canvas)
                     drawBoss(canvas)
                     drawInvaders(canvas)
+                    drawMines(canvas)
                     drawPowerUps(canvas)
                     drawPlayer(canvas)
                     if (droneUp == 1) drawDrone(canvas)
                     if (cloneTimer > 0f) drawClone(canvas)
                     drawBullets(canvas)
                 }
+                State.SHOP -> drawShop(canvas)
                 State.GAME_OVER -> drawGameOver(canvas)
             }
 
@@ -1897,6 +2198,54 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                     canvas.drawText("PRONTO!", bx, by - r - 14f * scale, textPaint)
                     textPaint.textAlign = Paint.Align.LEFT
                 }
+                fillPaint.style = Paint.Style.FILL
+                // Dash button (bottom-left first)
+                val dashX = 70f * scale
+                val dashY = h - 84f * scale
+                val dr = 42f * scale
+                fillPaint.style = Paint.Style.FILL
+                setShadow(null)
+                fillPaint.color = Color.argb(150, 10, 14, 30)
+                canvas.drawCircle(dashX, dashY, dr, fillPaint)
+                fillPaint.color = if (dashCooldown <= 0f) Color.argb(220, 40, 90, 90) else Color.argb(120, 40, 40, 50)
+                canvas.drawCircle(dashX, dashY, dr * 0.82f, fillPaint)
+                if (dashCooldown > 0f) {
+                    fillPaint.style = Paint.Style.STROKE
+                    fillPaint.strokeWidth = 5f * scale
+                    fillPaint.color = Color.rgb(120, 255, 200)
+                    val sweep = 360f * (1f - dashCooldown / 2.5f)
+                    canvas.drawArc(dashX - dr, dashY - dr, dashX + dr, dashY + dr, -90f, sweep, false, fillPaint)
+                    fillPaint.style = Paint.Style.FILL
+                }
+                textPaint.textAlign = Paint.Align.CENTER
+                textPaint.textSize = 28f * scale
+                textPaint.setShadowLayer(6f, 0f, 0f, Color.rgb(120, 255, 200))
+                textPaint.color = if (dashCooldown <= 0f) Color.rgb(180, 255, 230) else Color.rgb(120, 120, 130)
+                canvas.drawText(">>", dashX, dashY + 10f * scale, textPaint)
+                textPaint.textAlign = Paint.Align.LEFT
+                // Mine button (second)
+                val mineX = 170f * scale
+                val mineY = h - 84f * scale
+                fillPaint.style = Paint.Style.FILL
+                setShadow(null)
+                fillPaint.color = Color.argb(150, 10, 14, 30)
+                canvas.drawCircle(mineX, mineY, dr, fillPaint)
+                fillPaint.color = if (mineCount > 0) Color.argb(220, 90, 50, 40) else Color.argb(120, 40, 40, 50)
+                canvas.drawCircle(mineX, mineY, dr * 0.82f, fillPaint)
+                if (mineCount == 0 && mineTimer > 0f) {
+                    fillPaint.style = Paint.Style.STROKE
+                    fillPaint.strokeWidth = 5f * scale
+                    fillPaint.color = Color.rgb(255, 140, 60)
+                    val sweepM = 360f * (1f - mineTimer / 6f)
+                    canvas.drawArc(mineX - dr, mineY - dr, mineX + dr, mineY + dr, -90f, sweepM, false, fillPaint)
+                    fillPaint.style = Paint.Style.FILL
+                }
+                textPaint.textAlign = Paint.Align.CENTER
+                textPaint.textSize = 30f * scale
+                textPaint.setShadowLayer(6f, 0f, 0f, Color.rgb(255, 140, 60))
+                textPaint.color = if (mineCount > 0) Color.rgb(255, 200, 160) else Color.rgb(120, 120, 130)
+                canvas.drawText("@", mineX, mineY + 10f * scale, textPaint)
+                textPaint.textAlign = Paint.Align.LEFT
                 fillPaint.style = Paint.Style.FILL
             }
 
@@ -2044,16 +2393,13 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         canvas.save()
         canvas.rotate(bank, x, y)
 
-        // Wings with metallic gradient — combat wings widen and gain tip cannons
+        // Wings with metallic gradient — combat wings widen and gain tip cannons (skin aware)
         val span = 1f + 0.12f * wingUp
+        val skinCols = getSkinColors(selectedSkin)
         fillPaint.style = Paint.Style.FILL
         fillPaint.shader = LinearGradient(
             x - half * span, y - half, x + half * span, y + half,
-            intArrayOf(
-                Color.rgb(190, 255, 240),
-                Color.rgb(0, 210, 175),
-                Color.rgb(0, 90, 110)
-            ),
+            skinCols,
             floatArrayOf(0f, 0.55f, 1f),
             Shader.TileMode.CLAMP
         )
@@ -2115,13 +2461,14 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             setShadow(null)
         }
 
-        // Fuselage with vertical metallic gradient
+        // Fuselage with vertical metallic gradient (skin)
+        val skinColsFuselage = getSkinColors(selectedSkin)
         fillPaint.shader = LinearGradient(
             x, y - half, x, y + half,
             intArrayOf(
                 Color.rgb(235, 255, 252),
-                Color.rgb(90, 235, 205),
-                Color.rgb(0, 110, 130)
+                skinColsFuselage[0],
+                skinColsFuselage[2]
             ),
             floatArrayOf(0f, 0.45f, 1f),
             Shader.TileMode.CLAMP
@@ -2304,6 +2651,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     }
 
     private fun drawInvaders(canvas: Canvas) {
+        // névoa = alpha reduzido nos inimigos (hordeModifier==2) via layer alpha
+        val fog = hordeModifier == 2
+        var fogLayer = -1
+        if (fog) fogLayer = canvas.saveLayerAlpha(0f, 0f, w, h, 110)
         for (inv in invaders) {
             if (!inv.alive) continue
             when (inv.variant) {
@@ -2315,11 +2666,16 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                 5 -> drawSquid(canvas, inv)
                 6 -> drawShieldBearer(canvas, inv)
                 7 -> drawSniper(canvas, inv)
+                8 -> drawSwarmer(canvas, inv)
+                9 -> drawCamuflado(canvas, inv)
+                10 -> drawFireTrail(canvas, inv)
                 else -> drawSwarmer(canvas, inv)
             }
         }
+        if (fog) canvas.restoreToCount(fogLayer)
         setShadow(null)
         fillPaint.shader = null
+        fillPaint.alpha = 255
     }
 
     private fun drawHunter(canvas: Canvas, inv: Invader) {
@@ -2465,6 +2821,58 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         fillPaint.color = Color.WHITE
         canvas.drawCircle(inv.x - s * 0.12f, inv.y - s * 0.11f, s * 0.03f, fillPaint)
         canvas.drawCircle(inv.x + s * 0.16f, inv.y - s * 0.11f, s * 0.03f, fillPaint)
+    }
+
+    private fun drawCamuflado(canvas: Canvas, inv: Invader) {
+        val s = inv.size
+        val dist = hypot(playerX - inv.x, playerY - inv.y)
+        val revealed = dist < 200f * scale
+        val alpha = if (revealed) 255 else 40
+        drawShadowCircle(canvas, inv.x, inv.y, s * 0.55f)
+        fillPaint.style = Paint.Style.FILL
+        fillPaint.color = inv.color
+        fillPaint.alpha = alpha
+        setShadow(if (revealed) inv.color else Color.TRANSPARENT)
+        // Corpo camuflado - forma similar ao armored mas fantasma
+        canvas.drawRoundRect(inv.x - s * 0.85f, inv.y - s * 0.45f, inv.x + s * 0.85f, inv.y + s * 0.35f, s * 0.25f, s * 0.25f, fillPaint)
+        if (revealed) {
+            fillPaint.alpha = 255
+            fillPaint.color = Color.WHITE
+            canvas.drawCircle(inv.x - s * 0.2f, inv.y - s * 0.1f, s * 0.08f, fillPaint)
+            canvas.drawCircle(inv.x + s * 0.2f, inv.y - s * 0.1f, s * 0.08f, fillPaint)
+            fillPaint.color = Color.BLACK
+            canvas.drawCircle(inv.x - s * 0.2f, inv.y - s * 0.1f, s * 0.04f, fillPaint)
+            canvas.drawCircle(inv.x + s * 0.2f, inv.y - s * 0.1f, s * 0.04f, fillPaint)
+        } else {
+            // silhueta tracejada
+            fillPaint.style = Paint.Style.STROKE
+            fillPaint.strokeWidth = 2f * scale
+            fillPaint.color = Color.argb(alpha, 180, 180, 190)
+            canvas.drawRoundRect(inv.x - s * 0.85f, inv.y - s * 0.45f, inv.x + s * 0.85f, inv.y + s * 0.35f, s * 0.25f, s * 0.25f, fillPaint)
+            fillPaint.style = Paint.Style.FILL
+        }
+        fillPaint.alpha = 255
+        setShadow(null)
+    }
+
+    private fun drawFireTrail(canvas: Canvas, inv: Invader) {
+        val s = inv.size
+        drawShadowCircle(canvas, inv.x, inv.y, s * 0.6f)
+        // Rastro de fogo atrás
+        fillPaint.style = Paint.Style.FILL
+        fillPaint.shader = RadialGradient(inv.x, inv.y + s * 0.3f, s * 0.9f, intArrayOf(Color.argb(120, 255, 120, 30), Color.TRANSPARENT), floatArrayOf(0f, 1f), Shader.TileMode.CLAMP)
+        canvas.drawCircle(inv.x, inv.y + s * 0.3f, s * 0.9f, fillPaint)
+        fillPaint.shader = null
+        setShadow(inv.color)
+        fillPaint.color = inv.color
+        canvas.drawCircle(inv.x, inv.y, s * 0.55f, fillPaint)
+        // Chamas internas pulsantes
+        val flicker = sin(inv.pulse * 6f) * 0.15f + 0.85f
+        fillPaint.color = Color.argb((200 * flicker).toInt(), 255, 200, 60)
+        canvas.drawCircle(inv.x, inv.y + s * 0.15f, s * 0.25f * flicker, fillPaint)
+        fillPaint.color = Color.WHITE
+        canvas.drawCircle(inv.x, inv.y - s * 0.05f, s * 0.08f, fillPaint)
+        setShadow(null)
     }
 
     private fun drawCrab(canvas: Canvas, inv: Invader) {
@@ -2899,9 +3307,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         val hullCols = when (b.type) {
             1 -> intArrayOf(Color.rgb(45, 90, 130), Color.rgb(18, 48, 90), Color.rgb(6, 18, 40)) // Glacial
             2 -> intArrayOf(Color.rgb(130, 45, 20), Color.rgb(90, 22, 12), Color.rgb(40, 10, 6)) // Vulcanico
+            3 -> intArrayOf(Color.rgb(20, 10, 30), Color.rgb(10, 5, 20), Color.rgb(2, 2, 8)) // Vazio - preto/roxo
             else -> intArrayOf(Color.rgb(90, 45, 130), Color.rgb(40, 18, 66), Color.rgb(12, 6, 22))
         }
-        val glowCol = when (b.type) { 1 -> Color.rgb(120, 230, 255); 2 -> Color.rgb(255, 140, 60); else -> Color.rgb(255, 80, 180) }
+        val glowCol = when (b.type) { 1 -> Color.rgb(120, 230, 255); 2 -> Color.rgb(255, 140, 60); 3 -> Color.rgb(120, 40, 180); else -> Color.rgb(255, 80, 180) }
         fillPaint.style = Paint.Style.FILL
         fillPaint.shader = LinearGradient(
             b.x, b.y - s * 0.6f, b.x, b.y + s * 0.6f, hullCols,
@@ -2937,6 +3346,22 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         for (i in -2..2) {
             if (i == 0) continue
             canvas.drawRect(b.x + i * s * 0.5f - s * 0.05f, b.y - s * 0.75f, b.x + i * s * 0.5f + s * 0.05f, b.y - s * 0.4f, fillPaint)
+        }
+        // Tipo 3: anel de buraco negro
+        if (b.type == 3) {
+            val pulse = 0.6f + sin(b.pulse * 3f) * 0.4f
+            fillPaint.style = Paint.Style.STROKE
+            fillPaint.strokeWidth = 6f * scale
+            fillPaint.color = Color.argb((120 + pulse * 80).toInt(), 80, 30, 140)
+            canvas.drawCircle(b.x, b.y, s * 0.55f + pulse * 8f * scale, fillPaint)
+            fillPaint.color = Color.argb((60 + pulse * 40).toInt(), 0, 0, 0)
+            fillPaint.style = Paint.Style.FILL
+            canvas.drawCircle(b.x, b.y, s * 0.32f, fillPaint)
+            fillPaint.style = Paint.Style.STROKE
+            fillPaint.strokeWidth = 3f * scale
+            fillPaint.color = Color.argb((180 + pulse * 60).toInt(), 140, 80, 220)
+            canvas.drawCircle(b.x, b.y, s * 0.42f, fillPaint)
+            fillPaint.style = Paint.Style.FILL
         }
     }
 
@@ -3061,6 +3486,18 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         textPaint.setShadowLayer(10f, 0f, 0f, Color.CYAN)
         textPaint.color = Color.WHITE
         canvas.drawText("SCORE $score", 30f, 56f * scale, textPaint)
+        // Combo rank S/A/B/C próximo ao score com cor distinta
+        val rank = comboRank()
+        val rankCol = comboRankColor()
+        textPaint.setShadowLayer(10f, 0f, 0f, rankCol)
+        textPaint.color = rankCol
+        val scoreW = textPaint.measureText("SCORE $score")
+        canvas.drawText("RANK $rank", 30f + scoreW + 18f * scale, 56f * scale, textPaint)
+        textPaint.textSize = 22f * scale
+        textPaint.setShadowLayer(6f, 0f, 0f, Color.rgb(180, 180, 180))
+        textPaint.color = Color.rgb(200, 200, 200)
+        canvas.drawText("BEST ${bestRankLabel()}", 30f + scoreW + 18f * scale + textPaint.measureText("RANK $rank ") + 8f * scale, 56f * scale, textPaint)
+        textPaint.textSize = 40f * scale
 
         textPaint.textAlign = Paint.Align.CENTER
         textPaint.setShadowLayer(10f, 0f, 0f, Color.MAGENTA)
@@ -3082,6 +3519,13 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             }
             setShadow(null)
         }
+        // Coins display top-right below lives
+        textPaint.textAlign = Paint.Align.RIGHT
+        textPaint.textSize = 24f * scale
+        textPaint.setShadowLayer(6f, 0f, 0f, Color.rgb(255, 220, 120))
+        textPaint.color = Color.rgb(255, 220, 120)
+        canvas.drawText("$" + coins, w - 30f, 86f * scale, textPaint)
+        textPaint.textAlign = Paint.Align.LEFT
 
         // Boss HP bar
         val bs = boss
@@ -3148,12 +3592,21 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         }
 
         if (waveBannerTimer > 0f) {
-            val a = (waveBannerTimer / 1.6f).coerceIn(0f, 1f)
+            val a = (waveBannerTimer / 2.2f).coerceIn(0f, 1f)
             bigTextPaint.alpha = (a * 255).toInt()
             bigTextPaint.textSize = 72f * scale
-            bigTextPaint.setShadowLayer(22f, 0f, 0f, Color.CYAN)
-            bigTextPaint.color = Color.rgb(140, 240, 255)
-            canvas.drawText("WAVE $wave", w / 2f, h * 0.42f, bigTextPaint)
+            if (wave > 12) {
+                bigTextPaint.setShadowLayer(22f, 0f, 0f, Color.rgb(255, 60, 60))
+                bigTextPaint.color = Color.rgb(255, 80, 80)
+                canvas.drawText("MODO HORDA", w / 2f, h * 0.42f, bigTextPaint)
+                bigTextPaint.textSize = 44f * scale
+                bigTextPaint.color = Color.rgb(255, 180, 180)
+                canvas.drawText("WAVE $wave", w / 2f, h * 0.48f, bigTextPaint)
+            } else {
+                bigTextPaint.setShadowLayer(22f, 0f, 0f, Color.CYAN)
+                bigTextPaint.color = Color.rgb(140, 240, 255)
+                canvas.drawText("WAVE $wave", w / 2f, h * 0.42f, bigTextPaint)
+            }
             bigTextPaint.alpha = 255
         }
 
@@ -3219,6 +3672,131 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         canvas.drawText(label, x + bw + 12f * scale, y + bh * 0.95f, textPaint)
     }
 
+    private fun drawMines(canvas: Canvas) {
+        for (m in mines) {
+            val pulse = 0.6f + sin(m.pulse * 3f) * 0.4f
+            fillPaint.style = Paint.Style.FILL
+            setShadow(Color.rgb(255, 140, 60))
+            fillPaint.color = Color.rgb(255, 180, 60)
+            canvas.drawCircle(m.x, m.y, 18f * scale + pulse * 4f * scale, fillPaint)
+            fillPaint.color = Color.rgb(255, 90, 40)
+            canvas.drawCircle(m.x, m.y, 10f * scale, fillPaint)
+            fillPaint.color = Color.WHITE
+            canvas.drawCircle(m.x, m.y, 4f * scale, fillPaint)
+            // timer ring
+            fillPaint.style = Paint.Style.STROKE
+            fillPaint.strokeWidth = 3f * scale
+            fillPaint.color = Color.argb(180, 255, 220, 120)
+            val sweep = 360f * (m.timer / 1.8f)
+            canvas.drawArc(m.x - 22f*scale, m.y - 22f*scale, m.x + 22f*scale, m.y + 22f*scale, -90f, sweep, false, fillPaint)
+            fillPaint.style = Paint.Style.FILL
+            setShadow(null)
+        }
+    }
+
+    private fun drawShop(canvas: Canvas) {
+        // Fundo escuro
+        fillPaint.style = Paint.Style.FILL
+        setShadow(null)
+        fillPaint.color = Color.argb(200, 8, 10, 30)
+        canvas.drawRect(0f, 0f, w, h, fillPaint)
+        // Titulo
+        bigTextPaint.textSize = 64f * scale
+        bigTextPaint.setShadowLayer(18f, 0f, 0f, Color.rgb(255, 220, 120))
+        bigTextPaint.color = Color.WHITE
+        canvas.drawText("LOJA", w/2f, h * 0.18f, bigTextPaint)
+        textPaint.textAlign = Paint.Align.CENTER
+        textPaint.textSize = 26f * scale
+        textPaint.setShadowLayer(8f, 0f, 0f, Color.rgb(255, 220, 120))
+        textPaint.color = Color.rgb(255, 220, 120)
+        canvas.drawText("COINS: $coins", w/2f, h * 0.24f, textPaint)
+        textPaint.textAlign = Paint.Align.LEFT
+        // Grade 3 skins
+        val cardW = 280f * scale
+        val cardH = 260f * scale
+        val gap = 30f * scale
+        val totalW = cardW * 3 + gap * 2
+        val startX = w / 2f - totalW / 2f
+        val startY = h * 0.32f
+        val names = arrayOf("PADRAO", "RUBI", "OURO")
+        val prices = arrayOf(0, 500, 500)
+        val skinCols = arrayOf(
+            intArrayOf(Color.rgb(0, 210, 175), Color.rgb(0, 90, 110)),
+            intArrayOf(Color.rgb(255, 90, 90), Color.rgb(90, 10, 30)),
+            intArrayOf(Color.rgb(255, 220, 120), Color.rgb(120, 90, 20))
+        )
+        for (i in 0..2) {
+            val x = startX + i * (cardW + gap)
+            val y = startY
+            // card bg
+            fillPaint.color = if (selectedSkin == i) Color.argb(220, 30, 60, 50) else Color.argb(160, 20, 20, 40)
+            setShadow(if (selectedSkin == i) Color.rgb(255, 220, 120) else Color.TRANSPARENT)
+            canvas.drawRoundRect(x, y, x + cardW, y + cardH, 18f*scale, 18f*scale, fillPaint)
+            setShadow(null)
+            // preview nave
+            val px = x + cardW/2f
+            val py = y + 90f * scale
+            fillPaint.style = Paint.Style.FILL
+            fillPaint.color = skinCols[i][0]
+            val path = android.graphics.Path().apply {
+                moveTo(px, py - 30f*scale)
+                lineTo(px - 40f*scale, py + 20f*scale)
+                lineTo(px, py + 8f*scale)
+                lineTo(px + 40f*scale, py + 20f*scale)
+                close()
+            }
+            canvas.drawPath(path, fillPaint)
+            // nome
+            textPaint.textAlign = Paint.Align.CENTER
+            textPaint.textSize = 22f * scale
+            textPaint.setShadowLayer(6f, 0f, 0f, skinCols[i][0])
+            textPaint.color = Color.WHITE
+            canvas.drawText(names[i], px, y + 150f*scale, textPaint)
+            // botao
+            val btnW = 180f * scale
+            val btnH = 48f * scale
+            val bx = px - btnW/2f
+            val by = y + cardH - 62f * scale
+            val owned = ownedSkins.contains(i)
+            val canBuy = !owned && coins >= prices[i]
+            fillPaint.color = when {
+                selectedSkin == i -> Color.rgb(120, 255, 160)
+                owned -> Color.rgb(90, 200, 255)
+                canBuy -> Color.rgb(255, 220, 120)
+                else -> Color.rgb(80, 80, 90)
+            }
+            canvas.drawRoundRect(bx, by, bx+btnW, by+btnH, btnH/2f, btnH/2f, fillPaint)
+            textPaint.textSize = 18f * scale
+            textPaint.setShadowLayer(4f, 0f, 0f, Color.BLACK)
+            textPaint.color = Color.BLACK
+            val label = when {
+                selectedSkin == i -> "SELECIONADO"
+                owned -> "SELECIONAR"
+                else -> "COMPRAR 500"
+            }
+            canvas.drawText(label, px, by + btnH*0.68f, textPaint)
+            textPaint.textAlign = Paint.Align.LEFT
+        }
+        // botao VOLTAR
+        val bw = 260f * scale
+        val bh = 58f * scale
+        val left = w/2f - bw/2f
+        val top = h * 0.88f
+        fillPaint.color = Color.argb(200, 40, 40, 60)
+        canvas.drawRoundRect(left, top, left+bw, top+bh, bh/2f, bh/2f, fillPaint)
+        fillPaint.style = Paint.Style.STROKE
+        fillPaint.strokeWidth = 3f * scale
+        fillPaint.color = Color.WHITE
+        canvas.drawRoundRect(left, top, left+bw, top+bh, bh/2f, bh/2f, fillPaint)
+        fillPaint.style = Paint.Style.FILL
+        textPaint.textAlign = Paint.Align.CENTER
+        textPaint.textSize = 28f * scale
+        textPaint.setShadowLayer(8f, 0f, 0f, Color.CYAN)
+        textPaint.color = Color.WHITE
+        canvas.drawText("VOLTAR", w/2f, top + bh*0.68f, textPaint)
+        textPaint.textAlign = Paint.Align.LEFT
+    }
+
     private fun drawMenu(canvas: Canvas) {
         val pulse = 0.5f + sin(bgTime * 3f) * 0.5f
 
@@ -3261,6 +3839,15 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         textPaint.setShadowLayer(10f, 0f, 0f, Color.rgb(255, 216, 120))
         textPaint.color = Color.rgb(255, 226, 150)
         canvas.drawText("RECORDE: $highScore", w / 2f, h * 0.55f, textPaint)
+        // Leaderboard top3
+        if (leaderboard.isNotEmpty()) {
+            textPaint.textSize = 22f * scale
+            textPaint.setShadowLayer(6f, 0f, 0f, Color.CYAN)
+            textPaint.color = Color.argb(200, 180, 220, 255)
+            for (i in 0 until minOf(3, leaderboard.size)) {
+                canvas.drawText("${i+1}. ${leaderboard[i]}", w / 2f, h * 0.55f + 28f * scale + i * 24f * scale, textPaint)
+            }
+        }
 
         // JOGAR button
         val bw = 340f * scale
@@ -3280,6 +3867,24 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         textPaint.setShadowLayer(14f, 0f, 0f, Color.rgb(0, 255, 190))
         textPaint.color = Color.WHITE
         canvas.drawText("JOGAR", w / 2f, top + bh * 0.68f, textPaint)
+        // LOJA button
+        val bw2 = 260f * scale
+        val bh2 = 58f * scale
+        val left2 = w / 2f - bw2 / 2f
+        val top2 = h * 0.73f
+        setShadow(Color.rgb(255, 220, 120))
+        fillPaint.color = Color.argb(200, 60, 50, 20)
+        canvas.drawRoundRect(left2, top2, left2 + bw2, top2 + bh2, bh2/2f, bh2/2f, fillPaint)
+        fillPaint.style = Paint.Style.STROKE
+        fillPaint.strokeWidth = 3f * scale
+        fillPaint.color = Color.rgb(255, 220, 120)
+        canvas.drawRoundRect(left2, top2, left2 + bw2, top2 + bh2, bh2/2f, bh2/2f, fillPaint)
+        fillPaint.style = Paint.Style.FILL
+        setShadow(null)
+        textPaint.textSize = 28f * scale
+        textPaint.setShadowLayer(8f, 0f, 0f, Color.rgb(255, 220, 120))
+        textPaint.color = Color.WHITE
+        canvas.drawText("LOJA  $" + coins, w / 2f, top2 + bh2 * 0.68f, textPaint)
 
         // Controls hint
         textPaint.textSize = 20f * scale
@@ -3306,6 +3911,17 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         bigTextPaint.setShadowLayer(12f, 0f, 0f, Color.CYAN)
         bigTextPaint.color = Color.WHITE
         canvas.drawText("SCORE: $score", w / 2f, h / 2f + 60f * scale, bigTextPaint)
+        // leaderboard top3 in game over
+        if (leaderboard.isNotEmpty()) {
+            textPaint.textAlign = Paint.Align.CENTER
+            textPaint.textSize = 20f * scale
+            textPaint.setShadowLayer(6f, 0f, 0f, Color.rgb(255, 216, 120))
+            textPaint.color = Color.rgb(255, 226, 150)
+            for (i in 0 until minOf(3, leaderboard.size)) {
+                canvas.drawText("TOP ${i+1}: ${leaderboard[i]}", w/2f, h/2f + 90f*scale + i*22f*scale, textPaint)
+            }
+            textPaint.textAlign = Paint.Align.LEFT
+        }
 
         val alpha = if (gameOverTimer > 1.2f && (gameOverTimer * 2f).toInt() % 2 == 0) 255 else 90
         bigTextPaint.alpha = alpha
@@ -3338,6 +3954,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     }
 
     // ---------- Entities ----------
+
+    private class Mine(var x: Float, var y: Float, var timer: Float = 1.8f, var pulse: Float = 0f)
 
     private class Bullet(
         var x: Float,
