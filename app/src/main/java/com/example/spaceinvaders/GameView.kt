@@ -95,6 +95,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     // UI-thread -> game-thread requests (avoid mutating lists off-thread)
     @Volatile private var specialRequested = false
     @Volatile private var resetRequested = false
+    @Volatile private var surfaceInitRequested = false
 
     // Ship upgrades (per run)
     private var engineUp = 0
@@ -407,6 +408,18 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
             if (surfaceReady && w > 0) {
                 // Consume UI-thread requests safely on the game thread
+                if (surfaceInitRequested) {
+                    surfaceInitRequested = false
+                    try {
+                        initStars()
+                        initDust()
+                        initDebris()
+                        initBackgrounds()
+                    } catch (t: Throwable) {
+                        // A bad background shader must never prevent the game from rendering
+                        Log.e("SpaceInvaders", "initBackgrounds failed", t)
+                    }
+                }
                 if (resetRequested) {
                     resetRequested = false
                     resetGame()
@@ -486,15 +499,9 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         playerW = 90f * scale
         if (playerX == 0f) playerX = w / 2f
         targetX = playerX
-        try {
-            initStars()
-            initDust()
-            initDebris()
-            initBackgrounds()
-        } catch (t: Throwable) {
-            // A bad background shader must never prevent the game from rendering
-            Log.e("SpaceInvaders", "initBackgrounds failed", t)
-        }
+        // A inicializacao das listas (stars/dust/debris/backgrounds) e' deferida
+        // para a game thread, evitando ConcurrentModificationException com o draw.
+        surfaceInitRequested = true
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
