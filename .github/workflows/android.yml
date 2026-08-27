@@ -24,14 +24,15 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: '8.7'
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
 
       - name: Run unit tests
-        run: gradle testDebugUnitTest --no-daemon
+        run: ./gradlew testDebugUnitTest --no-daemon
 
       - name: Build debug APK
-        run: gradle assembleDebug --no-daemon
+        run: ./gradlew assembleDebug --no-daemon
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -78,26 +79,46 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: '8.7'
 
-      - name: Generate ephemeral signing keystore
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Prepare signing keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          KS_PASS=$(openssl rand -hex 16)
-          echo "KS_PASS=$KS_PASS" >> "$GITHUB_ENV"
-          keytool -genkeypair -v \
-            -keystore "$RUNNER_TEMP/ci.keystore" \
-            -alias spaceinvaders \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass "$KS_PASS" -keypass "$KS_PASS" \
-            -dname "CN=Space Invaders CI, OU=Games, O=CI, L=SP, ST=SP, C=BR"
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "Using fixed keystore from secrets"
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/ci.keystore"
+            echo "KEYSTORE_PATH=$RUNNER_TEMP/ci.keystore" >> "$GITHUB_ENV"
+            echo "KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=${ANDROID_KEY_ALIAS:-spaceinvaders}" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=${ANDROID_KEY_PASSWORD:-$ANDROID_KEYSTORE_PASSWORD}" >> "$GITHUB_ENV"
+          else
+            echo "No fixed keystore secret; generating ephemeral keystore"
+            KS_PASS=$(openssl rand -hex 16)
+            echo "KS_PASS=$KS_PASS" >> "$GITHUB_ENV"
+            keytool -genkeypair -v \
+              -keystore "$RUNNER_TEMP/ci.keystore" \
+              -alias spaceinvaders \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$KS_PASS" -keypass "$KS_PASS" \
+              -dname "CN=Space Invaders CI, OU=Games, O=CI, L=SP, ST=SP, C=BR"
+            echo "KEYSTORE_PATH=$RUNNER_TEMP/ci.keystore" >> "$GITHUB_ENV"
+            echo "KEYSTORE_PASSWORD=$KS_PASS" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=spaceinvaders" >> "$GITHUB_ENV"
+          fi
 
       - name: Build signed release APK
-        run: gradle assembleRelease --no-daemon
+        run: ./gradlew assembleRelease --no-daemon
         env:
-          KEYSTORE_PATH: ${{ runner.temp }}/ci.keystore
-          KEYSTORE_PASSWORD: ${{ env.KS_PASS }}
-          KEY_ALIAS: spaceinvaders
+          KEYSTORE_PATH: ${{ env.KEYSTORE_PATH }}
+          KEYSTORE_PASSWORD: ${{ env.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ env.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ env.KEY_PASSWORD }}
 
       - name: Create GitHub Release with APK
         env:

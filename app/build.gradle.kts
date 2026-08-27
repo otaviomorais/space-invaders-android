@@ -8,7 +8,7 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.example.spaceinvaders"
+        applicationId = "com.otaviomorais.spaceinvaders"
         minSdk = 24
         targetSdk = 35
         versionCode = 14

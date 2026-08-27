@@ -4,20 +4,27 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.RadialGradient
+import android.graphics.RectF
 import android.graphics.Shader
 import android.media.AudioManager
 import android.media.ToneGenerator
+import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
+import android.os.VibratorManager
 import android.util.Log
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import kotlin.math.abs
 import kotlin.math.atan2
+import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.min
@@ -60,6 +67,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     // Input (relative drag)
     private var dragging = false
     private var lastTouchX = 0f
+    private var dragPointerId = -1
 
     // Formation
     private var formOffX = 0f
@@ -73,6 +81,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private val invaders = mutableListOf<Invader>()
     private val particles = mutableListOf<Particle>()
     private val stars = mutableListOf<Star>()
+    private val PARTICLE_CAP = 600
     private var ufo: Ufo? = null
     private var ufoTimer = 9f
     private var invaderFireTimer = 1.8f
@@ -96,6 +105,94 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     @Volatile private var specialRequested = false
     @Volatile private var resetRequested = false
     @Volatile private var surfaceInitRequested = false
+    @Volatile private var uiShopRequested = false
+    @Volatile private var uiMenuRequested = false
+    @Volatile private var uiShopBackRequested = false
+    @Volatile private var uiSkinAction = -1 // -1 none, else skin index buy/select
+    @Volatile private var uiDashRequested = false
+    @Volatile private var uiMineRequested = false
+
+    // Shader cache: gradients built once, repositioned per draw via local matrix
+    private val shaderCache = HashMap<Long, Shader>()
+    private val localMatrix = Matrix()
+    private val addPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.ADD)
+    }
+
+    /** Additively blends a cached radial glow centered at (x, y). */
+    private fun drawGlow(canvas: Canvas, x: Float, y: Float, radius: Float, color: Int) {
+        val s = glowShader(color)
+        localMatrix.reset()
+        localMatrix.setScale(radius, radius)
+        localMatrix.postTranslate(x, y)
+        s.setLocalMatrix(localMatrix)
+        addPaint.shader = s
+        canvas.drawCircle(x, y, radius, addPaint)
+        addPaint.shader = null
+    }
+
+    /** Radial glow shader in unit space (center 0,0 radius 1) — position via setLocalMatrix. */
+    private fun glowShader(color: Int): Shader {
+        val key = (1L shl 62) or (color.toLong() and 0xFFFFFFFFL)
+        return shaderCache.getOrPut(key) {
+            RadialGradient(0f, 0f, 1f, color, Color.TRANSPARENT, Shader.TileMode.CLAMP)
+        }
+    }
+
+    /** Vertical hull gradient in unit space (y -1..1): light top, base mid, dark bottom. */
+    private fun hullShader(color: Int): Shader {
+        val key = (2L shl 62) or (color.toLong() and 0xFFFFFFFFL)
+        return shaderCache.getOrPut(key) {
+            LinearGradient(
+                0f, -1f, 0f, 1f,
+                intArrayOf(shade(color, 1.6f), color, shade(color, 0.4f)),
+                floatArrayOf(0f, 0.5f, 1f),
+                Shader.TileMode.CLAMP
+            )
+        }
+    }
+
+    /** Radial hull gradient in unit space (radius 1): highlight -> base -> shadow. */
+    private fun radialHullShader(color: Int): Shader {
+        val key = (3L shl 62) or (color.toLong() and 0xFFFFFFFFL)
+        return shaderCache.getOrPut(key) {
+            RadialGradient(
+                0f, 0f, 1f,
+                intArrayOf(shade(color, 1.6f), color, shade(color, 0.35f)),
+                floatArrayOf(0f, 0.5f, 1f),
+                Shader.TileMode.CLAMP
+            )
+        }
+    }
+
+    /** Generic unit-space shader cache entry; key packs kind, color and quantized params. */
+    private fun cachedUnitShader(kind: Int, a: Int, b: Int, build: () -> Shader): Shader {
+        val key = ((kind.toLong() and 0x3FFF) shl 48) or
+            ((a.toLong() and 0xFFFFFFFFL) shl 16) or
+            (b.toLong() and 0xFFFFL)
+        return shaderCache.getOrPut(key, build)
+    }
+
+    /** Positions a cached unit-space shader at (x, y) with uniform scale s. */
+    private fun placeShader(shader: Shader, x: Float, y: Float, s: Float) {
+        localMatrix.reset()
+        localMatrix.setScale(s, s)
+        localMatrix.postTranslate(x, y)
+        shader.setLocalMatrix(localMatrix)
+    }
+
+    /** Positions a cached unit-space shader at (x, y) with separate x/y scales. */
+    private fun placeShader(shader: Shader, x: Float, y: Float, sx: Float, sy: Float) {
+        localMatrix.reset()
+        localMatrix.setScale(sx, sy)
+        localMatrix.postTranslate(x, y)
+        shader.setLocalMatrix(localMatrix)
+    }
+
+    private fun clearShaderCache() {
+        shaderCache.clear()
+    }
 
     // Ship upgrades (per run)
     private var engineUp = 0
@@ -308,7 +405,13 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         leaderboard = lbStr.split(",").mapNotNull { it.toIntOrNull() }.toMutableList()
         if (leaderboard.isEmpty() && highScore > 0) leaderboard.add(highScore)
         try {
-            vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+            vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val vm = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
+                vm?.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+            }
             toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 60)
         } catch (_: Exception) {}
     }
@@ -327,9 +430,18 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         else -> intArrayOf(Color.rgb(190, 255, 240), Color.rgb(0, 210, 175), Color.rgb(0, 90, 110))
     }
 
-    private fun saveLeaderboard() {
-        val sorted = leaderboard.sortedDescending().take(5)
-        leaderboard = sorted.toMutableList()
+    private fun saveHighScore() {
+        if (score > highScore) {
+            highScore = score
+            context.getSharedPreferences("space_invaders", Context.MODE_PRIVATE)
+                .edit().putInt("highscore", highScore).apply()
+        }
+        saveLeaderboard(withScore = score)
+    }
+
+    private fun saveLeaderboard(withScore: Int? = null) {
+        if (withScore != null) leaderboard.add(withScore)
+        leaderboard = leaderboard.sortedDescending().take(5).toMutableList()
         context.getSharedPreferences("space_invaders", Context.MODE_PRIVATE).edit()
             .putString("leaderboard", leaderboard.joinToString(","))
             .apply()
@@ -338,7 +450,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private fun triggerVibration(light: Boolean) {
         try {
             val v = vibrator ?: return
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 v.vibrate(VibrationEffect.createOneShot(if (light) 50 else 120, VibrationEffect.DEFAULT_AMPLITUDE))
             } else {
                 @Suppress("DEPRECATION") v.vibrate(if (light) 50 else 120)
@@ -352,15 +464,12 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         } catch (_: Exception) {}
     }
 
-    private fun saveHighScore() {
-        if (score > highScore) {
-            highScore = score
-            context.getSharedPreferences("space_invaders", Context.MODE_PRIVATE)
-                .edit().putInt("highscore", highScore).apply()
-        }
-        leaderboard.add(score)
-        leaderboard = leaderboard.sortedDescending().take(5).toMutableList()
-        saveLeaderboard()
+    /** Frees hardware resources; call from the Activity in onDestroy. */
+    fun release() {
+        try {
+            toneGenerator?.release()
+        } catch (_: Exception) {}
+        toneGenerator = null
     }
 
     private fun comboRank(): String = GameRules.comboRank(combo)
@@ -430,6 +539,56 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                         cineTimer <= 0f && bossVictoryTimer <= 0f
                     ) {
                         triggerSpecial()
+                    }
+                }
+                if (uiShopRequested) {
+                    uiShopRequested = false
+                    state = State.SHOP
+                }
+                if (uiShopBackRequested) {
+                    uiShopBackRequested = false
+                    state = State.MENU
+                }
+                if (uiMenuRequested) {
+                    uiMenuRequested = false
+                    saveHighScore()
+                    state = State.MENU
+                }
+                if (uiSkinAction >= 0) {
+                    val skin = uiSkinAction
+                    uiSkinAction = -1
+                    if (skin in 0..2) {
+                        if (ownedSkins.contains(skin)) {
+                            selectedSkin = skin
+                            saveCoinsAndSkins()
+                        } else if (coins >= 500) {
+                            coins -= 500
+                            ownedSkins.add(skin)
+                            selectedSkin = skin
+                            saveCoinsAndSkins()
+                        }
+                    }
+                }
+                if (uiDashRequested) {
+                    uiDashRequested = false
+                    if (state == State.PLAYING && dashCooldown <= 0f) {
+                        dashCooldown = 2.5f
+                        invincible = 0.6f
+                        val dir = if (playerX < w / 2f) 1f else -1f
+                        playerX = (playerX + dir * 180f * scale).coerceIn(playerW, w - playerW)
+                        targetX = playerX
+                        shake = maxOf(shake, 8f)
+                        triggerVibration(true)
+                        spawnSparks(playerX, playerY, Color.rgb(120, 255, 200), 10, true)
+                    }
+                }
+                if (uiMineRequested) {
+                    uiMineRequested = false
+                    if (state == State.PLAYING && mineCount > 0) {
+                        mineCount--
+                        mineTimer = 6f
+                        mines.add(Mine(playerX, playerY - 20f * scale))
+                        triggerVibration(true)
                     }
                 }
 
@@ -506,6 +665,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         surfaceReady = false
+        clearShaderCache()
     }
 
     // ---------- Setup ----------
@@ -927,42 +1087,71 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
     // ---------- Input ----------
 
+    // Shared UI geometry: single source of truth for hit-testing AND drawing,
+    // so touch regions can never drift away from what is rendered.
+
+    private fun menuPlayRect() = RectF(
+        w / 2f - 170f * scale, h * 0.62f,
+        w / 2f + 170f * scale, h * 0.62f + 78f * scale
+    )
+
+    private fun menuShopRect() = RectF(
+        w / 2f - 130f * scale, h * 0.73f,
+        w / 2f + 130f * scale, h * 0.73f + 58f * scale
+    )
+
+    private fun shopBackRect() = RectF(
+        w / 2f - 130f * scale, h * 0.88f,
+        w / 2f + 130f * scale, h * 0.88f + 58f * scale
+    )
+
+    private val shopCardW = 280f
+    private val shopCardH = 260f
+    private val shopGap = 30f
+
+    private fun shopCardRect(i: Int): RectF {
+        val cardW = shopCardW * scale
+        val cardH = shopCardH * scale
+        val gap = shopGap * scale
+        val totalW = cardW * 3 + gap * 2
+        val startX = w / 2f - totalW / 2f
+        val startY = h * 0.32f
+        val x = startX + i * (cardW + gap)
+        return RectF(x, startY, x + cardW, startY + cardH)
+    }
+
+    private fun shopBuyRect(i: Int): RectF {
+        val card = shopCardRect(i)
+        val btnW = 180f * scale
+        val btnH = 48f * scale
+        val cx = card.centerX()
+        val by = card.bottom - 62f * scale
+        return RectF(cx - btnW / 2f, by, cx + btnW / 2f, by + btnH)
+    }
+
+    private fun gameOverMenuRect() = RectF(30f, h - 74f * scale, 190f * scale, h - 26f * scale)
+
+    private fun dashButtonCenter() = Pair(70f * scale, h - 84f * scale)
+
+    private fun mineButtonCenter() = Pair(170f * scale, h - 84f * scale)
+
+    private fun specialButtonCenter() = Pair(w - 84f * scale, h - 84f * scale)
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                val idx = event.actionIndex
+                val px = event.getX(idx)
+                val py = event.getY(idx)
                 // SHOP state
                 if (state == State.SHOP) {
-                    val bh = 78f * scale
-                    val bwBack = 260f * scale
-                    val leftBack = w / 2f - bwBack / 2f
-                    val topBack = h * 0.88f
-                    if (event.x in leftBack..(leftBack + bwBack) && event.y in topBack..(topBack + bh)) {
-                        state = State.MENU
+                    if (shopBackRect().contains(px, py)) {
+                        uiShopBackRequested = true
                         return true
                     }
-                    // grade de 3 skins
-                    val cardW = 280f * scale
-                    val cardH = 260f * scale
-                    val gap = 30f * scale
-                    val totalW = cardW * 3 + gap * 2
-                    val startX = w / 2f - totalW / 2f
-                    val startY = h * 0.32f
                     for (i in 0..2) {
-                        val cx = startX + i * (cardW + gap) + cardW/2f
-                        val cy = startY + cardH/2f
-                        val btnY = startY + cardH - 52f * scale
-                        val btnW = 180f * scale
-                        val btnH = 48f * scale
-                        if (event.x in (cx - btnW/2f)..(cx + btnW/2f) && event.y in btnY..(btnY+btnH)) {
-                            if (ownedSkins.contains(i)) {
-                                selectedSkin = i
-                                saveCoinsAndSkins()
-                            } else if (coins >= 500) {
-                                coins -= 500
-                                ownedSkins.add(i)
-                                selectedSkin = i
-                                saveCoinsAndSkins()
-                            }
+                        if (shopBuyRect(i).contains(px, py)) {
+                            uiSkinAction = i
                             return true
                         }
                     }
@@ -970,80 +1159,72 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                 }
                 // Menu: JOGAR button and LOJA button
                 if (state == State.MENU) {
-                    val bw = 340f * scale
-                    val bh = 78f * scale
-                    val left = w / 2f - bw / 2f
-                    val top = h * 0.62f
-                    if (event.x in left..(left + bw) && event.y in top..(top + bh)) {
+                    if (menuPlayRect().contains(px, py)) {
                         resetRequested = true
                         return true
                     }
-                    // LOJA button below JOGAR
-                    val left2 = w / 2f - 260f * scale / 2f
-                    val top2 = h * 0.73f
-                    if (event.x in left2..(left2 + 260f*scale) && event.y in top2..(top2 + 58f*scale)) {
-                        state = State.SHOP
+                    if (menuShopRect().contains(px, py)) {
+                        uiShopRequested = true
                         return true
                     }
                     return true
                 }
                 // Secondary buttons in PLAYING (dash and mine) - bottom left
                 if (state == State.PLAYING) {
-                    val dashX = 70f * scale
-                    val dashY = h - 84f * scale
-                    if (hypot(event.x - dashX, event.y - dashY) < 52f * scale) {
-                        if (dashCooldown <= 0f) {
-                            dashCooldown = 2.5f
-                            invincible = 0.6f
-                            val dir = if (playerX < w/2f) 1f else -1f
-                            playerX = (playerX + dir * 180f * scale).coerceIn(playerW, w - playerW)
-                            targetX = playerX
-                            shake = maxOf(shake, 8f)
-                            triggerVibration(true)
-                            spawnSparks(playerX, playerY, Color.rgb(120, 255, 200), 10, true)
-                        }
+                    val (dashX, dashY) = dashButtonCenter()
+                    if (hypot(px - dashX, py - dashY) < 52f * scale) {
+                        uiDashRequested = true
                         return true
                     }
-                    val mineX = 170f * scale
-                    val mineY = h - 84f * scale
-                    if (hypot(event.x - mineX, event.y - mineY) < 52f * scale) {
-                        if (mineCount > 0) {
-                            mineCount--
-                            mineTimer = 6f
-                            mines.add(Mine(playerX, playerY - 20f * scale))
-                            triggerVibration(true)
-                        }
+                    val (mineX, mineY) = mineButtonCenter()
+                    if (hypot(px - mineX, py - mineY) < 52f * scale) {
+                        uiMineRequested = true
                         return true
                     }
-                }
-                // Special attack button (bottom-right)
-                val bx = w - 84f * scale
-                val by = h - 84f * scale
-                if (state == State.PLAYING && hypot(event.x - bx, event.y - by) < 62f * scale) {
-                    if (specialCharge >= 100f) specialRequested = true
+                    val (bx, by) = specialButtonCenter()
+                    if (hypot(px - bx, py - by) < 62f * scale) {
+                        if (specialCharge >= 100f) specialRequested = true
+                        return true
+                    }
+                    // Drag steering: a single tracked pointer drives the ship,
+                    // extra fingers (multitouch) never yank it.
+                    if (!dragging) {
+                        dragging = true
+                        dragPointerId = event.getPointerId(idx)
+                        lastTouchX = px
+                    }
                     return true
                 }
-                // Game over: MENU button (bottom-left)
-                if (state == State.GAME_OVER && gameOverTimer > 0.8f &&
-                    event.x < 210f * scale && event.y > h - 80f * scale
-                ) {
-                    saveHighScore()
-                    state = State.MENU
+                if (state == State.GAME_OVER) {
+                    if (gameOverTimer > 0.8f && gameOverMenuRect().contains(px, py)) {
+                        uiMenuRequested = true
+                        return true
+                    }
+                    if (gameOverTimer > 1.2f) resetRequested = true
                     return true
                 }
-                dragging = true
-                lastTouchX = event.x
-                if (state == State.GAME_OVER && gameOverTimer > 1.2f) resetRequested = true
             }
             MotionEvent.ACTION_MOVE -> {
-                if (dragging) {
-                    targetX += (event.x - lastTouchX) * (1.8f + engineUp * 0.2f)
-                    lastTouchX = event.x
-                    targetX = targetX.coerceIn(playerW, w - playerW)
+                if (dragging && dragPointerId >= 0) {
+                    val pIdx = event.findPointerIndex(dragPointerId)
+                    if (pIdx >= 0) {
+                        val px = event.getX(pIdx)
+                        targetX += (px - lastTouchX) * (1.8f + engineUp * 0.2f)
+                        lastTouchX = px
+                        targetX = targetX.coerceIn(playerW, w - playerW)
+                    }
                 }
             }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
+            MotionEvent.ACTION_POINTER_UP -> {
+                val upId = event.getPointerId(event.actionIndex)
+                if (dragging && upId == dragPointerId) {
+                    dragging = false
+                    dragPointerId = -1
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 dragging = false
+                dragPointerId = -1
             }
         }
         return true
@@ -1635,8 +1816,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             p.x += p.vx * dt
             p.y += p.vy * dt
             p.vy += p.gravity * dt
-            p.vx *= 0.98f
-            p.vy *= 0.98f
+            p.vx *= p.drag
+            p.vy *= p.drag
+            p.rot += p.rotSpeed * dt
+            if (p.grow != 0f) p.radius += p.grow * dt
         }
     }
 
@@ -2095,24 +2278,143 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
     // ---------- Particles ----------
 
+    private fun addParticle(p: Particle) {
+        if (particles.size >= PARTICLE_CAP) {
+            // Evict the oldest transient particle; keep structured rings/flash intact
+            val idx = particles.indexOfFirst {
+                it.kind == Particle.KIND_SPARK || it.kind == Particle.KIND_SMOKE || it.kind == Particle.KIND_EMBER
+            }
+            if (idx >= 0) particles.removeAt(idx) else return
+        }
+        particles.add(p)
+    }
+
     private fun explode(x: Float, y: Float, color: Int, big: Boolean = false, huge: Boolean = false) {
         if (big || huge) triggerVibration(false) else triggerVibration(true)
-        val count = when {
-            huge -> 140
-            big -> 46
-            else -> 24
+        val eScale = when {
+            huge -> 2.2f
+            big -> 1.4f
+            else -> 1f
         }
-        repeat(count) {
-            val angle = Random.nextFloat() * 2f * Math.PI.toFloat()
-            val speed = (Random.nextFloat() + 0.3f) * (if (huge) 520f else if (big) 340f else 220f) * scale
-            particles.add(
-                Particle(x, y, cos(angle) * speed, sin(angle) * speed,
-                    (Random.nextFloat() * 5f + 2.5f) * scale * (if (big) 1.6f else 1f),
-                    Random.nextFloat() * 0.5f + 0.45f, 0f, color, 260f * scale
-                ).also { it.maxLife = it.life }
-            )
+
+        // White-hot flash core
+        addParticle(Particle(x, y, 0f, 0f, (26f + 26f * eScale) * scale, 0.09f, 0.09f,
+            Color.WHITE, 0f).apply { kind = Particle.KIND_FLASH })
+
+        // Expanding fireball puffs
+        val puffs = when {
+            huge -> 7
+            big -> 5
+            else -> 3
         }
-        particles.add(Particle(x, y, 0f, 0f, 8f * scale, 0.35f, 0.35f, color, 0f).apply { isRing = true })
+        repeat(puffs) {
+            val a = Random.nextFloat() * 6.2832f
+            val sp = (Random.nextFloat() * 60f + 10f) * scale * eScale
+            addParticle(Particle(
+                x + cos(a) * 6f * scale * eScale, y + sin(a) * 6f * scale * eScale,
+                cos(a) * sp, sin(a) * sp - 20f * scale,
+                (13f + Random.nextFloat() * 11f) * scale * eScale,
+                0.35f + Random.nextFloat() * 0.2f, 0.55f, color, -60f * scale
+            ).apply {
+                kind = Particle.KIND_FIRE
+                drag = 0.92f
+                grow = 30f * scale * eScale
+                maxLife = life
+            })
+        }
+
+        // Fast sparks
+        val sparks = when {
+            huge -> 52
+            big -> 24
+            else -> 13
+        }
+        repeat(sparks) {
+            val a = Random.nextFloat() * 6.2832f
+            val sp = (Random.nextFloat() + 0.3f) * (if (huge) 500f else if (big) 350f else 230f) * scale
+            addParticle(Particle(x, y, cos(a) * sp, sin(a) * sp,
+                (Random.nextFloat() * 2.2f + 1.1f) * scale,
+                Random.nextFloat() * 0.35f + 0.3f, 0.65f, sparkColor(color), 320f * scale
+            ).apply {
+                kind = Particle.KIND_SPARK
+                drag = 0.985f
+                maxLife = life
+            })
+        }
+
+        // Tumbling solid debris
+        val chunks = when {
+            huge -> 8
+            big -> 5
+            else -> 3
+        }
+        repeat(chunks) {
+            val a = Random.nextFloat() * 6.2832f
+            val sp = (Random.nextFloat() + 0.2f) * 190f * scale * eScale
+            addParticle(Particle(x, y, cos(a) * sp, sin(a) * sp - 40f * scale,
+                (Random.nextFloat() * 3f + 2f) * scale * eScale,
+                Random.nextFloat() * 0.5f + 0.7f, 1.2f, shade(color, 0.55f), 480f * scale
+            ).apply {
+                kind = Particle.KIND_DEBRIS
+                rotSpeed = (Random.nextFloat() - 0.5f) * 720f
+                drag = 0.99f
+                maxLife = life
+            })
+        }
+
+        // Smoke plume that lingers after the fireball dies
+        val smoke = when {
+            huge -> 6
+            big -> 4
+            else -> 2
+        }
+        repeat(smoke) {
+            val a = Random.nextFloat() * 6.2832f
+            val sp = (Random.nextFloat() * 40f + 8f) * scale
+            addParticle(Particle(x, y, cos(a) * sp, sin(a) * sp - 30f * scale,
+                (9f + Random.nextFloat() * 8f) * scale,
+                0.9f + Random.nextFloat() * 0.5f, 1.4f, 0, -25f * scale
+            ).apply {
+                kind = Particle.KIND_SMOKE
+                drag = 0.96f
+                grow = 24f * scale
+                maxLife = life
+            })
+        }
+
+        // Shockwave ring
+        addParticle(Particle(x, y, 0f, 0f, 8f * scale * eScale, 0.38f, 0.38f, color, 0f).apply {
+            kind = Particle.KIND_RING
+        })
+
+        // Lingering embers that drift and flicker
+        val embers = if (huge) 6 else 3
+        repeat(embers) {
+            val a = Random.nextFloat() * 6.2832f
+            val sp = (Random.nextFloat() * 80f + 20f) * scale
+            addParticle(Particle(x, y, cos(a) * sp, sin(a) * sp - 60f * scale,
+                2.2f * scale, 0.9f + Random.nextFloat() * 0.5f, 1.4f,
+                Color.rgb(255, 170, 70), 140f * scale
+            ).apply {
+                kind = Particle.KIND_EMBER
+                drag = 0.985f
+                maxLife = life
+            })
+        }
+    }
+
+    private fun sparkColor(base: Int): Int {
+        // Half the sparks keep the victim's hue, half are white-hot molten bits
+        return if (Random.nextFloat() < 0.5f) shade(base, 1.5f)
+        else Color.rgb(255, 150 + Random.nextInt(80), 50 + Random.nextInt(60))
+    }
+
+    private fun fireRampColor(t: Float): Int = when {
+        t > 0.8f -> Color.WHITE
+        t > 0.55f -> Color.rgb(255, 238, 150)
+        t > 0.3f -> Color.rgb(255, 160, 50)
+        t > 0.15f -> Color.rgb(215, 70, 25)
+        else -> Color.rgb(85, 40, 35)
     }
 
     private fun spawnSparks(x: Float, y: Float, color: Int, count: Int, small: Boolean, spreadUp: Boolean = false) {
@@ -2120,12 +2422,13 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             val angle = if (spreadUp) (-Math.PI.toFloat()) + (Random.nextFloat() - 0.5f) * 1.2f
             else Random.nextFloat() * 2f * Math.PI.toFloat()
             val speed = (Random.nextFloat() + 0.2f) * 260f * scale
-            particles.add(
-                Particle(x, y, cos(angle) * speed, sin(angle) * speed,
-                    (Random.nextFloat() * 3f + 1.5f) * scale * (if (small) 0.7f else 1f),
-                    Random.nextFloat() * 0.25f + 0.2f, 0.45f, color, 150f * scale
-                ).apply { maxLife = life }
-            )
+            addParticle(Particle(x, y, cos(angle) * speed, sin(angle) * speed,
+                (Random.nextFloat() * 3f + 1.5f) * scale * (if (small) 0.7f else 1f),
+                Random.nextFloat() * 0.25f + 0.2f, 0.45f, color, 150f * scale
+            ).apply {
+                kind = Particle.KIND_SPARK
+                maxLife = life
+            })
         }
     }
 
@@ -2410,39 +2713,34 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         // Ground shadow
         drawShadowEllipse(canvas, x, y + half * 0.72f, half * 1.25f, half * 0.2f)
 
-        // Aura
-        glowPaint.shader = RadialGradient(
-            x, y, half * 2.2f,
-            Color.argb(90, 0, 255, 190), Color.TRANSPARENT,
-            Shader.TileMode.CLAMP
-        )
-        fillPaint.style = Paint.Style.FILL
-        canvas.drawCircle(x, y, half * 2.2f, glowPaint)
-
-        // Engine flames (behind hull, unrotated) — ion engine upgrades make them bigger
-        setShadow(Color.rgb(255, 170, 40))
-        fillPaint.shader = null
+        // Engine heat haze (additive, cached glow)
         if (engineUp > 0) {
-            glowPaint.shader = RadialGradient(
-                x, y + half * 0.5f, half * (0.7f + 0.25f * engineUp),
-                Color.argb(70 + engineUp * 25, 255, 160, 40), Color.TRANSPARENT,
-                Shader.TileMode.CLAMP
-            )
-            canvas.drawCircle(x, y + half * 0.5f, half * (0.7f + 0.25f * engineUp), glowPaint)
+            drawGlow(canvas, x, y + half * 0.55f, half * (0.75f + 0.25f * engineUp), Color.argb(90, 255, 150, 40))
         }
+        drawGlow(canvas, x, y + half * 0.45f, half * 0.55f, Color.argb(55, 120, 190, 255))
+
+        // Engine flames (behind hull) — twin jet exhausts: blue plume, white-hot core
+        setShadow(null)
+        fillPaint.shader = null
         val flameScale = 1f + 0.3f * engineUp
         for (side in floatArrayOf(-0.34f, 0.34f)) {
-            fillPaint.color = Color.rgb(255, 190, 60)
             val fl = half * (0.4f + Random.nextFloat() * 0.3f) * flameScale
             val fx = x + side * half
             flamePath.reset()
-            flamePath.moveTo(fx - half * 0.13f, y + half * 0.42f)
+            flamePath.moveTo(fx - half * 0.12f, y + half * 0.42f)
             flamePath.lineTo(fx, y + half * 0.42f + fl)
-            flamePath.lineTo(fx + half * 0.13f, y + half * 0.42f)
+            flamePath.lineTo(fx + half * 0.12f, y + half * 0.42f)
             flamePath.close()
+            fillPaint.color = Color.argb(200, 90, 170, 255)
+            canvas.drawPath(flamePath, fillPaint)
+            flamePath.reset()
+            flamePath.moveTo(fx - half * 0.055f, y + half * 0.42f)
+            flamePath.lineTo(fx, y + half * 0.42f + fl * 0.6f)
+            flamePath.lineTo(fx + half * 0.055f, y + half * 0.42f)
+            flamePath.close()
+            fillPaint.color = Color.rgb(235, 245, 255)
             canvas.drawPath(flamePath, fillPaint)
         }
-        setShadow(null)
 
         // Shield bubble
         if (shieldUp) {
@@ -2461,16 +2759,12 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         canvas.save()
         canvas.rotate(bank, x, y)
 
-        // Wings with metallic gradient — combat wings widen and gain tip cannons (skin aware)
+        // Delta wings — gunmetal alloy with a machined sheen
         val span = 1f + 0.12f * wingUp
-        val skinCols = getSkinColors(selectedSkin)
         fillPaint.style = Paint.Style.FILL
-        fillPaint.shader = LinearGradient(
-            x - half * span, y - half, x + half * span, y + half,
-            skinCols,
-            floatArrayOf(0f, 0.55f, 1f),
-            Shader.TileMode.CLAMP
-        )
+        val wingShader = hullShader(Color.rgb(112, 122, 138))
+        placeShader(wingShader, x, y + half * 0.1f, half * 1.1f)
+        fillPaint.shader = wingShader
         wingsPath.reset()
         wingsPath.moveTo(x, y - half * 0.55f)
         wingsPath.lineTo(x - half * 1.08f * span, y + half * 0.62f)
@@ -2479,11 +2773,24 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         wingsPath.lineTo(x + half * 0.42f, y + half * 0.52f)
         wingsPath.lineTo(x + half * 1.08f * span, y + half * 0.62f)
         wingsPath.close()
-        setShadow(Color.rgb(0, 220, 180))
+        setShadow(null)
         canvas.drawPath(wingsPath, fillPaint)
+        // Wing panel lines
+        fillPaint.shader = null
+        fillPaint.style = Paint.Style.STROKE
+        fillPaint.strokeWidth = max(1f, half * 0.03f)
+        fillPaint.color = Color.argb(120, 20, 26, 34)
+        canvas.drawLine(x - half * 0.5f * span, y - half * 0.16f, x - half * 1.0f * span, y + half * 0.55f, fillPaint)
+        canvas.drawLine(x + half * 0.5f * span, y - half * 0.16f, x + half * 1.0f * span, y + half * 0.55f, fillPaint)
+        fillPaint.style = Paint.Style.FILL
+
+        // Skin accent stripes along the wing leading edges
+        val skinCols = getSkinColors(selectedSkin)
+        fillPaint.color = skinCols[1]
+        canvas.drawLine(x, y - half * 0.5f, x - half * 1.02f * span, y + half * 0.58f, fillPaint)
+        canvas.drawLine(x, y - half * 0.5f, x + half * 1.02f * span, y + half * 0.58f, fillPaint)
 
         // Wingtip navigation lights (red left, green right)
-        fillPaint.shader = null
         setShadow(null)
         fillPaint.color = Color.rgb(255, 60, 60)
         canvas.drawCircle(x - half * 1.02f * span, y + half * 0.58f, half * 0.09f, fillPaint)
@@ -2493,7 +2800,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         // Wing tip cannons
         if (wingUp > 0) {
             setShadow(Color.rgb(120, 255, 200))
-            fillPaint.color = Color.rgb(20, 120, 105)
+            val podShader = hullShader(Color.rgb(30, 90, 82))
+            placeShader(podShader, 0f, 0f, 0.001f)
+            placeShader(podShader, x, y + half * 0.46f, 1f, half * 0.16f)
+            fillPaint.shader = podShader
             for (side in floatArrayOf(-1f, 1f)) {
                 canvas.drawRoundRect(
                     x + side * half * span - half * 0.06f, y + half * 0.3f,
@@ -2501,22 +2811,18 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                     half * 0.05f, half * 0.05f, fillPaint
                 )
             }
+            fillPaint.shader = null
             setShadow(null)
         }
 
         // Hull side pods — reinforced armor
         if (hullUp > 0) {
             fillPaint.style = Paint.Style.FILL
-            fillPaint.shader = LinearGradient(
-                x - half, y, x + half, y + half,
-                intArrayOf(
-                    Color.rgb(150, 200, 190),
-                    Color.rgb(40, 110, 120)
-                ),
-                floatArrayOf(0f, 1f),
-                Shader.TileMode.CLAMP
-            )
-            setShadow(Color.rgb(60, 160, 170))
+            val podShader = hullShader(Color.rgb(96, 128, 140))
+            placeShader(podShader, 0f, 0f, 0.001f)
+            placeShader(podShader, 0f, y + half * 0.25f, 1f, half * 0.3f)
+            fillPaint.shader = podShader
+            setShadow(null)
             for (side in floatArrayOf(-1f, 1f)) {
                 canvas.drawRoundRect(
                     x + side * half * 0.92f - half * 0.14f, y - half * 0.05f,
@@ -2525,35 +2831,33 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                 )
             }
             fillPaint.shader = null
-            setShadow(null)
         }
 
-        // Fuselage with vertical metallic gradient (skin)
-        val skinColsFuselage = getSkinColors(selectedSkin)
-        fillPaint.shader = LinearGradient(
-            x, y - half, x, y + half,
-            intArrayOf(
-                Color.rgb(235, 255, 252),
-                skinColsFuselage[0],
-                skinColsFuselage[2]
-            ),
-            floatArrayOf(0f, 0.45f, 1f),
-            Shader.TileMode.CLAMP
-        )
-        setShadow(Color.rgb(0, 230, 195))
+        // Fuselage — gunmetal plate with vertical light falloff
+        val fusShader = hullShader(Color.rgb(128, 138, 152))
+        placeShader(fusShader, x, y - half * 0.2f, 1f, half * 0.72f)
+        fillPaint.shader = fusShader
+        setShadow(null)
         fuselagePath.reset()
         fuselagePath.moveTo(x, y - half * 0.95f)
         fuselagePath.lineTo(x - half * 0.34f, y + half * 0.48f)
         fuselagePath.lineTo(x + half * 0.34f, y + half * 0.48f)
         fuselagePath.close()
         canvas.drawPath(fuselagePath, fillPaint)
+        // Skin accent stripe down the spine
         fillPaint.shader = null
-        setShadow(null)
+        fillPaint.color = skinCols[1]
+        flamePath.reset()
+        flamePath.moveTo(x, y - half * 0.9f)
+        flamePath.lineTo(x - half * 0.07f, y + half * 0.42f)
+        flamePath.lineTo(x + half * 0.07f, y + half * 0.42f)
+        flamePath.close()
+        canvas.drawPath(flamePath, fillPaint)
 
         // Plasma cannon barrels on the nose
         if (cannonUp > 0) {
             setShadow(Color.rgb(120, 255, 200))
-            fillPaint.color = Color.rgb(15, 95, 85)
+            fillPaint.color = Color.rgb(25, 32, 42)
             val barrelOffsets = if (cannonUp >= 2) floatArrayOf(-0.12f, 0.12f) else floatArrayOf(0f)
             for (off in barrelOffsets) {
                 canvas.drawRoundRect(
@@ -2585,12 +2889,9 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         if (shipLevel >= 3) {
             // Armor plates flanking the fuselage
             fillPaint.style = Paint.Style.FILL
-            fillPaint.shader = LinearGradient(
-                x - half * 0.5f, y, x + half * 0.5f, y + half * 0.5f,
-                intArrayOf(Color.rgb(170, 190, 225), Color.rgb(60, 80, 120)),
-                floatArrayOf(0f, 1f),
-                Shader.TileMode.CLAMP
-            )
+            val plateShader = hullShader(Color.rgb(150, 162, 178))
+            placeShader(plateShader, x, y + half * 0.17f, 1f, half * 0.28f)
+            fillPaint.shader = plateShader
             for (side in floatArrayOf(-1f, 1f)) {
                 canvas.drawRoundRect(
                     x + side * half * 0.3f - half * 0.07f, y - half * 0.1f,
@@ -2636,26 +2937,19 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         }
         fillPaint.style = Paint.Style.FILL
 
-        // Spine highlight
+        // Riveted spine highlight
         fillPaint.shader = null
         setShadow(null)
         fillPaint.strokeWidth = half * 0.07f
         fillPaint.style = Paint.Style.STROKE
-        fillPaint.color = Color.argb(150, 255, 255, 255)
+        fillPaint.color = Color.argb(120, 255, 255, 255)
         canvas.drawLine(x, y - half * 0.78f, x, y + half * 0.2f, fillPaint)
         fillPaint.style = Paint.Style.FILL
 
-        // Glass canopy
-        fillPaint.shader = RadialGradient(
-            x - half * 0.05f, y - half * 0.28f, half * 0.42f,
-            intArrayOf(
-                Color.WHITE,
-                Color.rgb(140, 230, 255),
-                Color.argb(230, 10, 60, 110)
-            ),
-            floatArrayOf(0f, 0.4f, 1f),
-            Shader.TileMode.CLAMP
-        )
+        // Glass canopy — dark cockpit glass with a specular glint
+        val glassShader = hullShader(Color.rgb(84, 140, 190))
+        placeShader(glassShader, x - half * 0.05f, y - half * 0.2f, half * 0.42f)
+        fillPaint.shader = glassShader
         canvas.drawOval(
             x - half * 0.19f, y - half * 0.46f,
             x + half * 0.19f, y + half * 0.06f, fillPaint
@@ -2747,13 +3041,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         val s = inv.size
         drawShadowCircle(canvas, inv.x, inv.y, s * 0.7f)
         fillPaint.style = Paint.Style.FILL
-        fillPaint.shader = LinearGradient(
-            inv.x, inv.y - s, inv.x, inv.y + s,
-            intArrayOf(shade(inv.color, 1.6f), inv.color, shade(inv.color, 0.4f)),
-            floatArrayOf(0f, 0.5f, 1f),
-            Shader.TileMode.CLAMP
-        )
-        setShadow(inv.color)
+        val hs = hullShader(inv.color)
+        placeShader(hs, inv.x, inv.y, 1f, s)
+        fillPaint.shader = hs
+        setShadow(null)
         // Dart-shaped attack craft pointing down
         val dart = Path().apply {
             moveTo(inv.x, inv.y + s * 0.95f)
@@ -2786,13 +3077,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         val s = inv.size
         drawShadowRect(canvas, inv.x, inv.y, s * 0.95f, s * 0.55f)
         fillPaint.style = Paint.Style.FILL
-        fillPaint.shader = RadialGradient(
-            inv.x - s * 0.3f, inv.y - s * 0.3f, s * 1.2f,
-            intArrayOf(shade(inv.color, 1.6f), inv.color, shade(inv.color, 0.35f)),
-            floatArrayOf(0f, 0.5f, 1f),
-            Shader.TileMode.CLAMP
-        )
-        setShadow(inv.color)
+        val rs = radialHullShader(inv.color)
+        placeShader(rs, inv.x - s * 0.3f, inv.y - s * 0.3f, s * 1.2f)
+        fillPaint.shader = rs
+        setShadow(null)
         canvas.drawRoundRect(
             inv.x - s * 0.95f, inv.y - s * 0.55f,
             inv.x + s * 0.95f, inv.y + s * 0.4f,
@@ -2815,14 +3103,12 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private fun drawShieldBearer(canvas: Canvas, inv: Invader) {
         val s = inv.size
         drawShadowRect(canvas, inv.x, inv.y, s * 0.9f, s * 0.5f)
-        // Ice hull
+        // Armored hull - angular plates
         fillPaint.style = Paint.Style.FILL
-        fillPaint.shader = RadialGradient(
-            inv.x - s * 0.25f, inv.y - s * 0.2f, s * 1.1f,
-            intArrayOf(shade(inv.color, 1.5f), inv.color, shade(inv.color, 0.45f)),
-            floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP
-        )
-        setShadow(inv.color)
+        val rs = radialHullShader(inv.color)
+        placeShader(rs, inv.x - s * 0.25f, inv.y - s * 0.2f, s * 1.1f)
+        fillPaint.shader = rs
+        setShadow(null)
         canvas.drawRoundRect(inv.x - s * 0.85f, inv.y - s * 0.5f, inv.x + s * 0.85f, inv.y + s * 0.35f, s * 0.35f, s * 0.35f, fillPaint)
         fillPaint.shader = null
         setShadow(null)
@@ -2923,12 +3209,11 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private fun drawFireTrail(canvas: Canvas, inv: Invader) {
         val s = inv.size
         drawShadowCircle(canvas, inv.x, inv.y, s * 0.6f)
-        // Rastro de fogo atrás
+        // Rastro de fogo atrás - cached glow
         fillPaint.style = Paint.Style.FILL
-        fillPaint.shader = RadialGradient(inv.x, inv.y + s * 0.3f, s * 0.9f, intArrayOf(Color.argb(120, 255, 120, 30), Color.TRANSPARENT), floatArrayOf(0f, 1f), Shader.TileMode.CLAMP)
-        canvas.drawCircle(inv.x, inv.y + s * 0.3f, s * 0.9f, fillPaint)
+        drawGlow(canvas, inv.x, inv.y + s * 0.3f, s * 0.9f, Color.argb(120, 255, 120, 30))
         fillPaint.shader = null
-        setShadow(inv.color)
+        setShadow(null)
         fillPaint.color = inv.color
         canvas.drawCircle(inv.x, inv.y, s * 0.55f, fillPaint)
         // Chamas internas pulsantes
@@ -2945,20 +3230,25 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         val pulse = 1f + sin(inv.pulse) * 0.06f
         drawShadowRect(canvas, inv.x, inv.y, s * pulse, s * 0.5f)
 
-        // Shell with spherical shading
+        // Angular warship hull - faceted armor plates
         fillPaint.style = Paint.Style.FILL
-        fillPaint.shader = LinearGradient(
-            inv.x - s, inv.y - s, inv.x + s, inv.y + s,
-            intArrayOf(shade(inv.color, 1.55f), inv.color, shade(inv.color, 0.4f)),
-            floatArrayOf(0f, 0.5f, 1f),
-            Shader.TileMode.CLAMP
-        )
-        setShadow(inv.color)
-        canvas.drawRoundRect(
-            inv.x - s * pulse, inv.y - s * 0.55f * pulse,
-            inv.x + s * pulse, inv.y + s * 0.30f * pulse,
-            s * 0.3f, s * 0.3f, fillPaint
-        )
+        val cs = hullShader(inv.color)
+        placeShader(cs, inv.x, inv.y - s * 0.12f, 1f, s)
+        fillPaint.shader = cs
+        setShadow(null)
+        // Main hull - beveled octagon
+        val hullPath = Path().apply {
+            moveTo(inv.x - s * 0.85f * pulse, inv.y - s * 0.4f * pulse)
+            lineTo(inv.x - s * 0.55f * pulse, inv.y - s * 0.55f * pulse)
+            lineTo(inv.x + s * 0.55f * pulse, inv.y - s * 0.55f * pulse)
+            lineTo(inv.x + s * 0.85f * pulse, inv.y - s * 0.4f * pulse)
+            lineTo(inv.x + s * pulse, inv.y + s * 0.15f * pulse)
+            lineTo(inv.x + s * 0.7f * pulse, inv.y + s * 0.30f * pulse)
+            lineTo(inv.x - s * 0.7f * pulse, inv.y + s * 0.30f * pulse)
+            lineTo(inv.x - s * pulse, inv.y + s * 0.15f * pulse)
+            close()
+        }
+        canvas.drawPath(hullPath, fillPaint)
         fillPaint.shader = null
 
         // Glossy highlight arc
@@ -3006,17 +3296,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         val s = inv.size
         drawShadowCircle(canvas, inv.x, inv.y, s * 0.62f)
 
-        // Translucent outer membrane
+        // Angular drone chassis
         fillPaint.style = Paint.Style.FILL
         setShadow(null)
-        val memColor = shade(inv.color, 1.6f)
-        fillPaint.shader = RadialGradient(
-            inv.x, inv.y - s * 0.1f, s * 0.88f,
-            intArrayOf(Color.argb(150, memColor shr 16 and 0xFF, memColor shr 8 and 0xFF, memColor and 0xFF), Color.TRANSPARENT),
-            floatArrayOf(0f, 1f),
-            Shader.TileMode.CLAMP
-        )
-        canvas.drawCircle(inv.x, inv.y - s * 0.1f, s * 0.88f, fillPaint)
+        drawGlow(canvas, inv.x, inv.y - s * 0.1f, s * 0.88f, Color.argb(55, inv.color shr 16 and 0xFF, inv.color shr 8 and 0xFF, inv.color and 0xFF))
         fillPaint.shader = null
 
         // Tentacles behind head
@@ -3038,30 +3321,25 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             fillPaint.color = shade(inv.color, 0.8f)
         }
 
-        // Head dome with volume shading
-        fillPaint.shader = RadialGradient(
-            inv.x - s * 0.2f, inv.y - s * 0.3f, s * 0.75f,
-            intArrayOf(
-                shade(inv.color, 1.7f),
-                inv.color,
-                shade(inv.color, 0.35f)
-            ),
-            floatArrayOf(0f, 0.55f, 1f),
-            Shader.TileMode.CLAMP
-        )
-        canvas.drawCircle(inv.x, inv.y - s * 0.1f, s * 0.62f, fillPaint)
+        // Faceted drone head - angular instead of sphere
+        val headS = radialHullShader(inv.color)
+        placeShader(headS, inv.x - s * 0.15f, inv.y - s * 0.2f, s * 0.75f)
+        fillPaint.shader = headS
+        val headPath = Path().apply {
+            moveTo(inv.x, inv.y - s * 0.72f)
+            lineTo(inv.x + s * 0.52f, inv.y - s * 0.35f)
+            lineTo(inv.x + s * 0.42f, inv.y + s * 0.22f)
+            lineTo(inv.x, inv.y + s * 0.38f)
+            lineTo(inv.x - s * 0.42f, inv.y + s * 0.22f)
+            lineTo(inv.x - s * 0.52f, inv.y - s * 0.35f)
+            close()
+        }
+        canvas.drawPath(headPath, fillPaint)
         fillPaint.shader = null
 
-        // Pulsing energy core
+        // Pulsing core - cached glow
         val corePulse = 0.6f + sin(inv.pulse * 2f) * 0.4f
-        fillPaint.shader = RadialGradient(
-            inv.x, inv.y - s * 0.1f, s * 0.32f,
-            intArrayOf(Color.WHITE, shade(inv.color, 1.4f), Color.TRANSPARENT),
-            floatArrayOf(0f, 0.5f, 1f),
-            Shader.TileMode.CLAMP
-        )
-        fillPaint.alpha = (120 + corePulse * 100).toInt()
-        canvas.drawCircle(inv.x, inv.y - s * 0.1f, s * 0.3f, fillPaint)
+        drawGlow(canvas, inv.x, inv.y - s * 0.1f, s * 0.32f, Color.argb((120 + corePulse * 100).toInt(), 255, 255, 255))
         fillPaint.alpha = 255
         fillPaint.shader = null
 
@@ -3079,19 +3357,12 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         val s = inv.size
         drawShadowRect(canvas, inv.x, inv.y, s, s * 0.5f)
 
-        // Heavy metallic hull
+        // Heavy angular armor - faceted bunker hull
         fillPaint.style = Paint.Style.FILL
-        fillPaint.shader = LinearGradient(
-            inv.x, inv.y - s * 0.6f, inv.x, inv.y + s * 0.35f,
-            intArrayOf(
-                shade(inv.color, 1.6f),
-                inv.color,
-                shade(inv.color, 0.35f)
-            ),
-            floatArrayOf(0f, 0.5f, 1f),
-            Shader.TileMode.CLAMP
-        )
-        setShadow(inv.color)
+        val armorHs = hullShader(inv.color)
+        placeShader(armorHs, inv.x, inv.y - s * 0.12f, 1f, s * 0.5f)
+        fillPaint.shader = armorHs
+        setShadow(null)
         canvas.drawRoundRect(
             inv.x - s, inv.y - s * 0.6f,
             inv.x + s, inv.y + s * 0.35f,
@@ -3140,42 +3411,42 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         val x = saucer.x
         val y = saucer.y
 
-        // Under-glow beam
+        // Under-glow beam - cached
         fillPaint.style = Paint.Style.FILL
         setShadow(null)
-        fillPaint.shader = RadialGradient(
-            x, y + s * 0.3f, s * 1.4f,
-            intArrayOf(Color.argb(90, 120, 255, 240), Color.TRANSPARENT),
-            floatArrayOf(0f, 1f),
-            Shader.TileMode.CLAMP
-        )
-        canvas.drawCircle(x, y + s * 0.3f, s * 1.4f, fillPaint)
+        drawGlow(canvas, x, y + s * 0.3f, s * 1.4f, Color.argb(90, 120, 255, 240))
         fillPaint.shader = null
 
-        // Metallic saucer body
-        fillPaint.shader = LinearGradient(
-            x, y - s * 0.28f, x, y + s * 0.34f,
-            intArrayOf(
-                Color.rgb(230, 255, 252),
-                Color.rgb(130, 245, 235),
-                Color.rgb(10, 90, 105)
-            ),
-            floatArrayOf(0f, 0.5f, 1f),
-            Shader.TileMode.CLAMP
-        )
-        setShadow(Color.rgb(120, 255, 240))
-        canvas.drawOval(x - s, y - s * 0.28f, x + s, y + s * 0.34f, fillPaint)
+        // Angular recon craft body - faceted
+        val ufoHs = hullShader(Color.rgb(130, 145, 160))
+        placeShader(ufoHs, x, y + s * 0.03f, 1f, s * 0.32f)
+        fillPaint.shader = ufoHs
+        setShadow(null)
+        val hullPath = Path().apply {
+            moveTo(x - s * 0.95f, y - s * 0.05f)
+            lineTo(x - s * 0.6f, y - s * 0.28f)
+            lineTo(x + s * 0.6f, y - s * 0.28f)
+            lineTo(x + s * 0.95f, y - s * 0.05f)
+            lineTo(x + s * 0.85f, y + s * 0.28f)
+            lineTo(x - s * 0.85f, y + s * 0.28f)
+            close()
+        }
+        canvas.drawPath(hullPath, fillPaint)
         fillPaint.shader = null
         setShadow(null)
 
-        // Glass dome with reflection
-        fillPaint.shader = RadialGradient(
-            x - s * 0.12f, y - s * 0.45f, s * 0.55f,
-            intArrayOf(Color.WHITE, Color.rgb(255, 110, 220), Color.argb(200, 90, 10, 70)),
-            floatArrayOf(0f, 0.45f, 1f),
-            Shader.TileMode.CLAMP
-        )
-        canvas.drawArc(x - s * 0.42f, y - s * 0.75f, x + s * 0.42f, y + s * 0.1f, 180f, 180f, true, fillPaint)
+        // Cockpit canopy - flat glass
+        val domeShader = hullShader(Color.rgb(180, 200, 215))
+        placeShader(domeShader, x, y - s * 0.32f, s * 0.45f)
+        fillPaint.shader = domeShader
+        val domePath = Path().apply {
+            moveTo(x - s * 0.42f, y - s * 0.08f)
+            lineTo(x - s * 0.28f, y - s * 0.62f)
+            lineTo(x + s * 0.28f, y - s * 0.62f)
+            lineTo(x + s * 0.42f, y - s * 0.08f)
+            close()
+        }
+        canvas.drawPath(domePath, fillPaint)
         fillPaint.shader = null
 
         // Running lights
@@ -3252,28 +3523,75 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     }
 
     private fun drawParticlesBelow(canvas: Canvas) {
+        // Dense battle smoke sits UNDER the entities
         fillPaint.style = Paint.Style.FILL
+        fillPaint.shader = null
+        setShadow(null)
         for (p in particles) {
-            if (p.isRing) continue
+            if (p.kind != Particle.KIND_SMOKE) continue
             val t = p.life / p.maxLife
-            fillPaint.color = p.color
-            fillPaint.alpha = (t * 230).toInt()
-            canvas.drawCircle(p.x, p.y, p.radius * (0.4f + t * 0.6f), fillPaint)
+            fillPaint.color = Color.argb((t * 84).toInt().coerceIn(0, 255), 92, 92, 102)
+            canvas.drawCircle(p.x, p.y, p.radius, fillPaint)
         }
         fillPaint.alpha = 255
     }
 
     private fun drawParticlesAbove(canvas: Canvas) {
-        fillPaint.style = Paint.Style.STROKE
-        for (p in particles) {
-            if (!p.isRing) continue
-            val t = 1f - p.life / p.maxLife
-            fillPaint.strokeWidth = (6f * (1f - t) + 1f) * scale
-            fillPaint.color = p.color
-            fillPaint.alpha = ((1f - t) * 200).toInt()
-            canvas.drawCircle(p.x, p.y, p.radius + t * 90f * scale, fillPaint)
-        }
         fillPaint.style = Paint.Style.FILL
+        fillPaint.shader = null
+        setShadow(null)
+        // Tumbling debris (normal blend, keeps its victim's hue)
+        for (p in particles) {
+            if (p.kind != Particle.KIND_DEBRIS) continue
+            val t = p.life / p.maxLife
+            fillPaint.color = p.color
+            fillPaint.alpha = (t * 255).toInt().coerceIn(0, 255)
+            canvas.save()
+            canvas.translate(p.x, p.y)
+            canvas.rotate(p.rot)
+            val s = p.radius
+            canvas.drawRect(-s, -s * 0.6f, s, s * 0.6f, fillPaint)
+            canvas.restore()
+        }
+        fillPaint.alpha = 255
+
+        // Energy: sparks, fire, flash, embers, rings (additive)
+        for (p in particles) {
+            when (p.kind) {
+                Particle.KIND_SPARK, Particle.KIND_EMBER -> {
+                    val t = p.life / p.maxLife
+                    addPaint.color = p.color
+                    if (p.kind == Particle.KIND_EMBER) {
+                        val flick = 0.6f + 0.4f * sin(p.x * 7f + bgTime * 18f)
+                        addPaint.alpha = (t * flick * 255f).toInt().coerceIn(0, 255)
+                    } else {
+                        addPaint.alpha = (t * 255).toInt().coerceIn(0, 255)
+                    }
+                    canvas.drawCircle(p.x, p.y, p.radius * (0.4f + t * 0.6f), addPaint)
+                }
+                Particle.KIND_FIRE -> {
+                    val t = p.life / p.maxLife
+                    addPaint.color = fireRampColor(t)
+                    addPaint.alpha = (t * 235).toInt().coerceIn(0, 255)
+                    canvas.drawCircle(p.x, p.y, p.radius, addPaint)
+                }
+                Particle.KIND_FLASH -> {
+                    val t = p.life / p.maxLife
+                    addPaint.color = Color.WHITE
+                    addPaint.alpha = (t * 230).toInt().coerceIn(0, 255)
+                    canvas.drawCircle(p.x, p.y, p.radius * (1.6f - t * 0.6f), addPaint)
+                }
+                Particle.KIND_RING -> {
+                    val t = 1f - p.life / p.maxLife
+                    addPaint.style = Paint.Style.STROKE
+                    addPaint.strokeWidth = (6f * (1f - t) + 1f) * scale
+                    addPaint.color = p.color
+                    addPaint.alpha = ((1f - t) * 210).toInt().coerceIn(0, 255)
+                    canvas.drawCircle(p.x, p.y, p.radius + t * 110f * scale, addPaint)
+                    addPaint.style = Paint.Style.FILL
+                }
+            }
+        }
         fillPaint.alpha = 255
     }
 
@@ -3376,14 +3694,29 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         }
         val glowCol = when (b.type) { 1 -> Color.rgb(120, 230, 255); 2 -> Color.rgb(255, 140, 60); 3 -> Color.rgb(120, 40, 180); else -> Color.rgb(255, 80, 180) }
         fillPaint.style = Paint.Style.FILL
-        fillPaint.shader = LinearGradient(
-            b.x, b.y - s * 0.6f, b.x, b.y + s * 0.6f, hullCols,
-            floatArrayOf(0f, 0.5f, 1f), Shader.TileMode.CLAMP
-        )
-        setShadow(glowCol)
-        canvas.drawOval(b.x - s * 1.3f, b.y - s * 0.5f, b.x + s * 1.3f, b.y + s * 0.55f, fillPaint)
-        fillPaint.shader = null
+        // Dreadnought hull - faceted angular plates, base color by sector
+        val hullBase = hullCols[1]
+        val bossHs = hullShader(hullBase)
+        placeShader(bossHs, b.x, b.y + s * 0.02f, 1f, s * 0.55f)
+        fillPaint.shader = bossHs
         setShadow(null)
+        val dreadPath = Path().apply {
+            moveTo(b.x - s * 1.2f, b.y - s * 0.15f)
+            lineTo(b.x - s * 0.9f, b.y - s * 0.48f)
+            lineTo(b.x + s * 0.9f, b.y - s * 0.48f)
+            lineTo(b.x + s * 1.2f, b.y - s * 0.15f)
+            lineTo(b.x + s * 1.05f, b.y + s * 0.38f)
+            lineTo(b.x - s * 1.05f, b.y + s * 0.38f)
+            close()
+        }
+        canvas.drawPath(dreadPath, fillPaint)
+        fillPaint.shader = null
+        // Hull plate lines
+        fillPaint.style = Paint.Style.STROKE
+        fillPaint.strokeWidth = 2f * scale
+        fillPaint.color = shade(hullBase, 1.4f)
+        canvas.drawPath(dreadPath, fillPaint)
+        fillPaint.style = Paint.Style.FILL
 
         // Side cannons
         fillPaint.color = Color.rgb(25, 12, 40)
@@ -3391,17 +3724,14 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             canvas.drawCircle(b.x + side * s * 1.05f, b.y + s * 0.1f, s * 0.22f, fillPaint)
         }
 
-        // Pulsing weak-point core
+        // Pulsing weak-point core - cached glow
         val coreCol = when (b.type) { 1 -> Color.rgb(120, 230, 255); 2 -> Color.rgb(255, 170, 60); else -> Color.rgb(255, 110, 200) }
         val corePulse = 0.7f + sin(b.pulse * 2f) * 0.3f
-        fillPaint.shader = RadialGradient(
-            b.x, b.y, s * 0.4f,
-            intArrayOf(Color.WHITE, coreCol, Color.TRANSPARENT),
-            floatArrayOf(0f, 0.45f, 1f),
-            Shader.TileMode.CLAMP
-        )
         fillPaint.alpha = (140 + corePulse * 100).toInt()
-        canvas.drawCircle(b.x, b.y, s * 0.4f, fillPaint)
+        drawGlow(canvas, b.x, b.y, s * 0.4f, coreCol)
+        // White hot center
+        fillPaint.alpha = (200).coerceAtMost(255)
+        canvas.drawCircle(b.x, b.y, s * 0.14f, fillPaint.apply { color = Color.WHITE; shader = null })
         fillPaint.alpha = 255
         fillPaint.shader = null
 
@@ -3480,17 +3810,14 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             drawShadowCircle(canvas, p.x, bobY, s)
             setShadow(color)
 
-            // Rotating diamond capsule
+            // Rotating diamond capsule - cached hull shader at origin
             canvas.save()
             canvas.translate(p.x, bobY)
             canvas.rotate((p.phase * 40f) % 360f)
             fillPaint.style = Paint.Style.FILL
-            fillPaint.shader = LinearGradient(
-                -s, -s, s, s,
-                intArrayOf(shade(color, 1.5f), color, shade(color, 0.5f)),
-                floatArrayOf(0f, 0.5f, 1f),
-                Shader.TileMode.CLAMP
-            )
+            val puHs = hullShader(color)
+            placeShader(puHs, 0f, 0f, s)
+            fillPaint.shader = puHs
             canvas.drawRoundRect(-s, -s, s, s, s * 0.35f, s * 0.35f, fillPaint)
             fillPaint.shader = null
             canvas.restore()
@@ -3547,8 +3874,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         textPaint.textSize = 40f * scale
 
         textPaint.textAlign = Paint.Align.LEFT
-        textPaint.setShadowLayer(10f, 0f, 0f, Color.CYAN)
-        textPaint.color = Color.WHITE
+        textPaint.setShadowLayer(10f, 0f, 0f, Color.rgb(45, 55, 70))
+        textPaint.color = Color.rgb(225, 232, 240)
         canvas.drawText("SCORE $score", 30f, 56f * scale, textPaint)
         // Combo rank S/A/B/C próximo ao score com cor distinta
         val rank = comboRank()
@@ -3564,13 +3891,13 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         textPaint.textSize = 40f * scale
 
         textPaint.textAlign = Paint.Align.CENTER
-        textPaint.setShadowLayer(10f, 0f, 0f, Color.MAGENTA)
-        textPaint.color = Color.rgb(255, 150, 240)
+        textPaint.setShadowLayer(10f, 0f, 0f, Color.rgb(60, 50, 30))
+        textPaint.color = Color.rgb(232, 206, 142)
         canvas.drawText(strWaveFmt.format(wave), w / 2f, 56f * scale, textPaint)
 
         textPaint.textAlign = Paint.Align.RIGHT
-        textPaint.setShadowLayer(10f, 0f, 0f, Color.GREEN)
-        textPaint.color = Color.rgb(120, 255, 160)
+        textPaint.setShadowLayer(10f, 0f, 0f, Color.rgb(40, 35, 35))
+        textPaint.color = Color.rgb(210, 70, 70)
         canvas.drawText("\u2665".repeat(lives.coerceAtLeast(0)), w - 30f, 56f * scale, textPaint)
         textPaint.textAlign = Paint.Align.LEFT
 
@@ -3867,15 +4194,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         // Decorative ship hovering above the title
         val sx = w / 2f
         val sy = h * 0.16f + sin(bgTime * 2f) * 8f * scale
-        glowPaint.shader = RadialGradient(
-            sx, sy, 90f * scale,
-            Color.argb(110, 0, 255, 190), Color.TRANSPARENT,
-            Shader.TileMode.CLAMP
-        )
+        drawGlow(canvas, sx, sy, 90f * scale, Color.argb(90, 180, 190, 200))
         fillPaint.style = Paint.Style.FILL
-        canvas.drawCircle(sx, sy, 90f * scale, glowPaint)
-        setShadow(Color.rgb(0, 255, 190))
-        fillPaint.color = Color.rgb(0, 255, 190)
+        setShadow(null)
+        fillPaint.color = Color.rgb(160, 170, 185)
         val ship = Path().apply {
             moveTo(sx, sy - 34f * scale)
             lineTo(sx - 26f * scale, sy + 22f * scale)
@@ -3888,13 +4210,13 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         fillPaint.color = Color.WHITE
         canvas.drawCircle(sx, sy - 6f * scale, 5f * scale, fillPaint)
 
-        // Title
+        // Title - tactical steel/amber
         bigTextPaint.textSize = 92f * scale
-        bigTextPaint.setShadowLayer(26f, 0f, 0f, Color.rgb(255, 90, 200))
-        bigTextPaint.color = Color.WHITE
+        bigTextPaint.setShadowLayer(26f, 0f, 0f, Color.rgb(45, 55, 70))
+        bigTextPaint.color = Color.rgb(225, 232, 240)
         canvas.drawText("SPACE", w / 2f, h * 0.36f, bigTextPaint)
-        bigTextPaint.setShadowLayer(26f, 0f, 0f, Color.rgb(0, 230, 255))
-        bigTextPaint.color = Color.rgb(140, 240, 255)
+        bigTextPaint.setShadowLayer(26f, 0f, 0f, Color.rgb(60, 50, 30))
+        bigTextPaint.color = Color.rgb(232, 206, 142)
         canvas.drawText("INVADERS", w / 2f, h * 0.47f, bigTextPaint)
 
         // High score
@@ -3906,36 +4228,35 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         // Leaderboard top3
         if (leaderboard.isNotEmpty()) {
             textPaint.textSize = 22f * scale
-            textPaint.setShadowLayer(6f, 0f, 0f, Color.CYAN)
-            textPaint.color = Color.argb(200, 180, 220, 255)
+            textPaint.setShadowLayer(6f, 0f, 0f, Color.rgb(45, 55, 70))
+            textPaint.color = Color.argb(200, 180, 200, 210)
             for (i in 0 until minOf(3, leaderboard.size)) {
                 canvas.drawText("${i+1}. ${leaderboard[i]}", w / 2f, h * 0.55f + 28f * scale + i * 24f * scale, textPaint)
             }
         }
 
-        // JOGAR button
-        val bw = 340f * scale
-        val bh = 78f * scale
-        val left = w / 2f - bw / 2f
-        val top = h * 0.62f
-        setShadow(Color.rgb(0, 255, 190))
-        fillPaint.color = Color.argb(230, 6, 60, 50)
-        canvas.drawRoundRect(left, top, left + bw, top + bh, bh / 2f, bh / 2f, fillPaint)
-        fillPaint.style = Paint.Style.STROKE
-        fillPaint.strokeWidth = 3.5f * scale
-        fillPaint.color = Color.rgb((120 + pulse * 135).toInt(), 255, 200)
-        canvas.drawRoundRect(left, top, left + bw, top + bh, bh / 2f, bh / 2f, fillPaint)
-        fillPaint.style = Paint.Style.FILL
-        setShadow(null)
-        textPaint.textSize = 44f * scale
-        textPaint.setShadowLayer(14f, 0f, 0f, Color.rgb(0, 255, 190))
-        textPaint.color = Color.WHITE
-        canvas.drawText(strPlay, w / 2f, top + bh * 0.68f, textPaint)
-        // LOJA button
-        val bw2 = 260f * scale
-        val bh2 = 58f * scale
-        val left2 = w / 2f - bw2 / 2f
-        val top2 = h * 0.73f
+        // JOGAR button - uses shared hitbox
+        run {
+            val r = menuPlayRect()
+            val left = r.left; val top = r.top; val bw = r.width(); val bh = r.height()
+            setShadow(Color.rgb(45, 55, 70))
+            fillPaint.color = Color.argb(230, 38, 45, 58)
+            canvas.drawRoundRect(left, top, left + bw, top + bh, bh / 2f, bh / 2f, fillPaint)
+            fillPaint.style = Paint.Style.STROKE
+            fillPaint.strokeWidth = 3.5f * scale
+            fillPaint.color = Color.rgb(180, 190, 205)
+            canvas.drawRoundRect(left, top, left + bw, top + bh, bh / 2f, bh / 2f, fillPaint)
+            fillPaint.style = Paint.Style.FILL
+            setShadow(null)
+            textPaint.textSize = 44f * scale
+            textPaint.setShadowLayer(14f, 0f, 0f, Color.rgb(45, 55, 70))
+            textPaint.color = Color.rgb(232, 206, 142)
+            canvas.drawText(strPlay, w / 2f, top + bh * 0.68f, textPaint)
+        }
+        // LOJA button - uses shared hitbox
+        run {
+            val r2 = menuShopRect()
+            val left2 = r2.left; val top2 = r2.top; val bw2 = r2.width(); val bh2 = r2.height()
         setShadow(Color.rgb(255, 220, 120))
         fillPaint.color = Color.argb(200, 60, 50, 20)
         canvas.drawRoundRect(left2, top2, left2 + bw2, top2 + bh2, bh2/2f, bh2/2f, fillPaint)
@@ -3949,17 +4270,18 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         textPaint.setShadowLayer(8f, 0f, 0f, Color.rgb(255, 220, 120))
         textPaint.color = Color.WHITE
         canvas.drawText(strShopCoinsFmt.format(coins), w / 2f, top2 + bh2 * 0.68f, textPaint)
+        }
 
-        // Controls hint
+        // Controls hint - tactical
         textPaint.textSize = 20f * scale
-        textPaint.setShadowLayer(6f, 0f, 0f, Color.CYAN)
-        textPaint.color = Color.argb(210, 190, 240, 255)
+        textPaint.setShadowLayer(6f, 0f, 0f, Color.rgb(45, 55, 70))
+        textPaint.color = Color.argb(210, 200, 210, 220)
         canvas.drawText(
             strControlsHint,
             w / 2f, h * 0.87f, textPaint
         )
-        textPaint.color = Color.argb(160, 255, 150, 230)
-        textPaint.setShadowLayer(6f, 0f, 0f, Color.MAGENTA)
+        textPaint.color = Color.argb(170, 180, 190, 205)
+        textPaint.setShadowLayer(6f, 0f, 0f, Color.rgb(45, 55, 70))
         canvas.drawText(strTagline, w / 2f, h * 0.92f, textPaint)
         textPaint.color = Color.WHITE
         textPaint.textAlign = Paint.Align.LEFT
@@ -4067,7 +4389,23 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         val color: Int,
         val gravity: Float,
         var isRing: Boolean = false
-    )
+    ) {
+        companion object {
+            const val KIND_SPARK = 0
+            const val KIND_FIRE = 1
+            const val KIND_SMOKE = 2
+            const val KIND_DEBRIS = 3
+            const val KIND_RING = 4
+            const val KIND_FLASH = 5
+            const val KIND_EMBER = 6
+        }
+
+        var kind: Int = if (isRing) KIND_RING else KIND_SPARK
+        var rot: Float = Random.nextFloat() * 360f
+        var rotSpeed: Float = 0f
+        var drag: Float = 0.98f
+        var grow: Float = 0f
+    }
 
     private class Star(var x: Float, var y: Float, val radius: Float, val speed: Float, val alpha: Int, val seed: Float, val z: Float)
 
