@@ -2778,7 +2778,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         // Wing panel lines
         fillPaint.shader = null
         fillPaint.style = Paint.Style.STROKE
-        fillPaint.strokeWidth = max(1f, half * 0.03f)
+        fillPaint.strokeWidth = maxOf(1f, half * 0.03f)
         fillPaint.color = Color.argb(120, 20, 26, 34)
         canvas.drawLine(x - half * 0.5f * span, y - half * 0.16f, x - half * 1.0f * span, y + half * 0.55f, fillPaint)
         canvas.drawLine(x + half * 0.5f * span, y - half * 0.16f, x + half * 1.0f * span, y + half * 0.55f, fillPaint)
@@ -3730,10 +3730,11 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         fillPaint.alpha = (140 + corePulse * 100).toInt()
         drawGlow(canvas, b.x, b.y, s * 0.4f, coreCol)
         // White hot center
-        fillPaint.alpha = (200).coerceAtMost(255)
-        canvas.drawCircle(b.x, b.y, s * 0.14f, fillPaint.apply { color = Color.WHITE; shader = null })
-        fillPaint.alpha = 255
+        fillPaint.alpha = 200
+        fillPaint.color = Color.WHITE
         fillPaint.shader = null
+        canvas.drawCircle(b.x, b.y, s * 0.14f, fillPaint)
+        fillPaint.alpha = 255
 
         // Spikes
         fillPaint.color = Color.rgb(60, 30, 90)
