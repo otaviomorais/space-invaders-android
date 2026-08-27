@@ -1,4 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Space Invaders</string>
+
+    <!-- Menu -->
+    <string name="ui_play">JOGAR</string>
+    <string name="ui_shop">LOJA</string>
+    <string name="ui_highscore_format">RECORDE: %1$d</string>
+    <string name="ui_shop_coins_format">LOJA  $%1$d</string>
+    <string name="ui_controls_hint">ARRASTE PARA MOVER  •  SEGURE PARA ATIRAR  •  BOTÃO E = ESPECIAL</string>
+    <string name="ui_tagline">SOBREVIVA AOS SETORES. DERRUBE AS NAVES-MÃE.</string>
+
+    <!-- Game Over -->
+    <string name="ui_game_over">GAME OVER</string>
+    <string name="ui_score_format">SCORE: %1$d</string>
+    <string name="ui_tap_to_restart">TOQUE PARA REINICIAR</string>
+    <string name="ui_menu">MENU</string>
+
+    <!-- Loja -->
+    <string name="ui_coins_format">COINS: %1$d</string>
+    <string name="ui_buy_format">COMPRAR %1$d</string>
+    <string name="ui_select">SELECIONAR</string>
+    <string name="ui_selected">SELECIONADO</string>
+    <string name="ui_back">VOLTAR</string>
+
+    <!-- HUD -->
+    <string name="ui_wave_format">WAVE %1$d</string>
+    <string name="ui_horde_mode">MODO HORDA</string>
+    <string name="ui_boss_mothership">NAVE-MAE</string>
 </resources>

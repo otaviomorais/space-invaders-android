@@ -23,9 +23,16 @@ import java.util.List;
 import java.util.Random;
 
 /**
- * Preview desktop do Space Invaders (mesmo visual/jogabilidade do APK).
+ * Preview desktop do Space Invaders (visual/jogabilidade inspirados no APK).
  * Compilado pelo GitHub Actions como JAR executavel (Java 8+).
  * Controles: arraste o mouse para mover, segure para atirar.
+ *
+ * ATENCAO: esta e' uma REIMPLEMENTACAO independente em Java/Swing do jogo
+ * Kotlin/Canvas em app/src/main/java/com/example/spaceinvaders/. Ela NAO
+ * compartilha codigo com o APK e pode ficar defasada quando a versao Android
+ * evoluir (novas ondas, power-ups, chefes, balanceamento). Ao alterar a
+ * logica do jogo Android, atualize tambem este preview se quiser paridade,
+ * ou trate-o apenas como uma previa aproximada.
  */
 public class DesktopPreview extends JPanel {
 

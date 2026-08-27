@@ -18,7 +18,12 @@ Baixe o artefato `space-invaders-desktop-preview` na aba **Actions**, extraia e 
 ```bash
 java -jar space-invaders-preview.jar
 ```
-(Requer Java 8+. É o mesmo jogo rodando numa janela 1280x720.)
+(Requer Java 8+. Roda numa janela 1280x720.)
+
+> **Nota:** o preview é uma reimplementação independente em Java/Swing do jogo
+> Kotlin/Canvas, para teste rápido no PC sem instalar o APK. Ele não compartilha
+> código com a versão Android e pode ficar defasado conforme o jogo evolui. A
+> fonte da verdade é `app/src/main/java/com/example/spaceinvaders/`.
 
 ## Releases
 Para gerar um release com APK assinado, crie uma tag:
@@ -30,6 +35,7 @@ O job `release` compila o APK assinado (keystore efêmero gerado no CI), cria a 
 
 ## CI
 O workflow `.github/workflows/android.yml` gera a cada push:
+- **Testes** unitários (`gradle testDebugUnitTest`) — validam a lógica pura em `GameRules`
 - **Artifact** `space-invaders-debug-apk` — APK debug para Android
 - **Artifact** `space-invaders-desktop-preview` — JAR executável para testar no PC
 - **Release** (em tags `v*`) — APK release assinado

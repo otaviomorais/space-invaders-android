@@ -5,12 +5,12 @@ plugins {
 
 android {
     namespace = "com.example.spaceinvaders"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.example.spaceinvaders"
         minSdk = 24
-        targetSdk = 34
+        targetSdk = 35
         versionCode = 14
         versionName = "3.1.0"
     }
@@ -29,8 +29,12 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
             val ksPath = System.getenv("KEYSTORE_PATH")
             signingConfig = if (ksPath != null) {
                 signingConfigs.getByName("ci")
@@ -47,4 +51,11 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
+}
+
+dependencies {
+    testImplementation("junit:junit:4.13.2")
 }
