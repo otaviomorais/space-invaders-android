@@ -12,8 +12,6 @@ import android.graphics.PorterDuffXfermode
 import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
-import android.media.AudioManager
-import android.media.ToneGenerator
 import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -111,6 +109,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     @Volatile private var uiSkinAction = -1 // -1 none, else skin index buy/select
     @Volatile private var uiDashRequested = false
     @Volatile private var uiMineRequested = false
+    @Volatile private var uiMuteRequested = false
 
     // Shader cache: gradients built once, repositioned per draw via local matrix
     private val shaderCache = HashMap<Long, Shader>()
@@ -238,7 +237,9 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
     // Som/vibracao
     private var vibrator: Vibrator? = null
-    private var toneGenerator: ToneGenerator? = null
+    private var synth: SynthSounds? = null
+    private var musicPlaying = false
+    private var muted = false
 
     // Leaderboard top5
     private var leaderboard = mutableListOf<Int>()
@@ -412,7 +413,9 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                 @Suppress("DEPRECATION")
                 context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
             }
-            toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 60)
+        } catch (_: Exception) {}
+        try {
+            synth = SynthSounds(context)
         } catch (_: Exception) {}
     }
 
@@ -458,18 +461,18 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         } catch (_: Exception) {}
     }
 
-    private fun playTone(success: Boolean) {
+    private fun playSound(sfx: SynthSounds.Sfx) {
         try {
-            toneGenerator?.startTone(if (success) ToneGenerator.TONE_PROP_BEEP else ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 120)
+            synth?.play(sfx)
         } catch (_: Exception) {}
     }
 
     /** Frees hardware resources; call from the Activity in onDestroy. */
     fun release() {
         try {
-            toneGenerator?.release()
+            synth?.release()
         } catch (_: Exception) {}
-        toneGenerator = null
+        synth = null
     }
 
     private fun comboRank(): String = GameRules.comboRank(combo)
@@ -506,6 +509,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         } catch (_: InterruptedException) {
         }
         thread = null
+        musicPlaying = false
+        try {
+            synth?.stopMusic()
+        } catch (_: Exception) {}
     }
 
     override fun run() {
@@ -590,6 +597,28 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                         mines.add(Mine(playerX, playerY - 20f * scale))
                         triggerVibration(true)
                     }
+                }
+                if (uiMuteRequested) {
+                    uiMuteRequested = false
+                    muted = !muted
+                    try {
+                        synth?.setMuted(muted)
+                    } catch (_: Exception) {}
+                }
+
+                // Ambient music: play only while actually fighting
+                if (state == State.PLAYING) {
+                    if (!musicPlaying) {
+                        musicPlaying = true
+                        try {
+                            synth?.startMusic()
+                        } catch (_: Exception) {}
+                    }
+                } else if (musicPlaying) {
+                    musicPlaying = false
+                    try {
+                        synth?.stopMusic()
+                    } catch (_: Exception) {}
                 }
 
                 try {
@@ -1137,6 +1166,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
     private fun specialButtonCenter() = Pair(w - 84f * scale, h - 84f * scale)
 
+    private fun muteButtonRect() = RectF(w - 60f * scale, 8f * scale, w - 8f * scale, 60f * scale)
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
@@ -1184,6 +1215,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                     val (bx, by) = specialButtonCenter()
                     if (hypot(px - bx, py - by) < 62f * scale) {
                         if (specialCharge >= 100f) specialRequested = true
+                        return true
+                    }
+                    if (muteButtonRect().contains(px, py)) {
+                        uiMuteRequested = true
                         return true
                     }
                     // Drag steering: a single tracked pointer drives the ship,
@@ -1675,6 +1710,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private fun finishBossDeath(b: Boss) {
         boss = null
         bossWave = false
+        playSound(SynthSounds.Sfx.BIG_EXPLODE)
         repeat(3) { i ->
             explode(b.x + (i - 1) * 70f * scale, b.y + (i - 1) * 30f * scale, Color.rgb(255, 120, 220), huge = true)
         }
@@ -1844,7 +1880,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         coins += base * mult
         saveCoinsAndSkins()
         triggerVibration(true)
-        playTone(true)
+        playSound(SynthSounds.Sfx.EXPLODE)
         if (combo >= 3) addFloat("COMBO x$mult", inv.x, inv.y - inv.size * 2f, Color.rgb(255, 230, 120))
         missionProgress(0, 1)
         if (inv.diving) missionProgress(2, 1)
@@ -1924,6 +1960,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         if (saucer != null && hypot(saucer.x - b.x, saucer.y - b.y) < 70 * scale) {
             ufo = null
             explode(saucer.x, saucer.y, Color.rgb(255, 220, 90), huge = true)
+            playSound(SynthSounds.Sfx.BIG_EXPLODE)
             addScore(150)
             missionProgress(4, 1)
             shake = maxOf(shake, 12f)
@@ -1949,7 +1986,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             shake = maxOf(shake, 8f)
             damageTakenThisWave = true
             triggerVibration(true)
-            playTone(false)
+            playSound(SynthSounds.Sfx.SHIELD)
             return
         }
 
@@ -1965,13 +2002,13 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             addFloat("ESCUDO QUEBRADO", playerX, playerY - 80 * scale, Color.rgb(111, 168, 255))
             shake = maxOf(shake, 8f)
             triggerVibration(true)
-            playTone(false)
+            playSound(SynthSounds.Sfx.SHIELD)
             return
         }
 
         explode(playerX, playerY, Color.rgb(0, 255, 180), big = true)
         triggerVibration(false)
-        playTone(false)
+        playSound(SynthSounds.Sfx.PLAYER_HIT)
         shake = 18f
         flashAlpha = 0.55f
         damagePulse = 1f
@@ -2048,6 +2085,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             bullets.add(Bullet(playerX - 58f * scale, playerY - playerW, 1050f * scale, Color.rgb(180, 160, 255)))
         }
         spawnSparks(playerX, playerY - playerW, Color.rgb(120, 255, 200), count = 4, small = true, spreadUp = true)
+        playSound(SynthSounds.Sfx.SHOT)
     }
 
     // ---------- Power-ups & cosmic FX ----------
@@ -2122,6 +2160,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     }
 
     private fun applyPowerUp(type: PowerType) {
+        playSound(SynthSounds.Sfx.POWERUP)
         when (type) {
             PowerType.RAPID -> {
                 rapidTimer = 8f
@@ -3918,6 +3957,51 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         textPaint.color = Color.rgb(255, 220, 120)
         canvas.drawText("$" + coins, w - 30f, 86f * scale, textPaint)
         textPaint.textAlign = Paint.Align.LEFT
+
+        // Mute button (top-right) - uses shared hitbox
+        run {
+            val r = muteButtonRect()
+            fillPaint.style = Paint.Style.FILL
+            fillPaint.shader = null
+            setShadow(null)
+            val bgCol = if (muted) Color.argb(180, 80, 40, 40) else Color.argb(160, 40, 48, 60)
+            fillPaint.color = bgCol
+            canvas.drawRoundRect(r.left, r.top, r.right, r.bottom, 12f * scale, 12f * scale, fillPaint)
+            // Speaker icon
+            val cx = r.centerX()
+            val cy = r.centerY()
+            val s = 16f * scale
+            fillPaint.color = if (muted) Color.rgb(255, 120, 120) else Color.rgb(200, 220, 240)
+            // Speaker body
+            val sp = Path().apply {
+                moveTo(cx - s * 0.6f, cy - s * 0.5f)
+                lineTo(cx - s * 0.2f, cy - s * 0.2f)
+                lineTo(cx + s * 0.3f, cy - s * 0.2f)
+                lineTo(cx + s * 0.6f, cy - s * 0.5f)
+                lineTo(cx + s * 0.6f, cy + s * 0.5f)
+                lineTo(cx + s * 0.3f, cy + s * 0.2f)
+                lineTo(cx - s * 0.2f, cy + s * 0.2f)
+                close()
+            }
+            canvas.drawPath(sp, fillPaint)
+            if (muted) {
+                // Slash
+                fillPaint.style = Paint.Style.STROKE
+                fillPaint.strokeWidth = 3f * scale
+                fillPaint.color = Color.rgb(255, 120, 120)
+                canvas.drawLine(r.left + 8f * scale, r.bottom - 8f * scale, r.right - 8f * scale, r.top + 8f * scale, fillPaint)
+                fillPaint.style = Paint.Style.FILL
+            }
+            // Sound wave arcs if not muted
+            if (!muted) {
+                fillPaint.style = Paint.Style.STROKE
+                fillPaint.strokeWidth = 2.5f * scale
+                fillPaint.color = Color.argb(180, 150, 180, 210)
+                canvas.drawArc(cx - s * 0.1f, cy - s * 0.9f, cx + s * 1.1f, cy + s * 0.9f, -50f, 100f, false, fillPaint)
+                canvas.drawArc(cx - s * 0.6f, cy - s * 1.3f, cx + s * 1.5f, cy + s * 1.3f, -40f, 80f, false, fillPaint)
+                fillPaint.style = Paint.Style.FILL
+            }
+        }
 
         // Boss HP bar
         val bs = boss
