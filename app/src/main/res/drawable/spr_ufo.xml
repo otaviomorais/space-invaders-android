@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="128dp"
+    android:height="64dp"
+    android:viewportWidth="128"
+    android:viewportHeight="64">
+
+    <!-- Metallic Outer Disk Ring -->
+    <path
+        android:pathData="M 8,36 Q 64,12 120,36 Q 64,60 8,36 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="8"
+                android:startY="12"
+                android:endX="120"
+                android:endY="60"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FFF59E0B" />
+                <item android:offset="0.5" android:color="#FFD97706" />
+                <item android:offset="1.0" android:color="#FF78350F" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Glowing Command Dome -->
+    <path
+        android:pathData="M 38,32 Q 64,4 90,32 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="38"
+                android:startY="4"
+                android:endX="90"
+                android:endY="32"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FFFEF08A" />
+                <item android:offset="0.5" android:color="#FFFACC15" />
+                <item android:offset="1.0" android:color="#FFCA8A04" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Perimeter Scanning Lights -->
+    <path
+        android:pathData="M 24,36 A 3,3 0 1,1 24,36 Z"
+        android:fillColor="#FFFFFFFF" />
+    <path
+        android:pathData="M 48,42 A 3.5,3.5 0 1,1 48,42 Z"
+        android:fillColor="#FFFFFFFF" />
+    <path
+        android:pathData="M 80,42 A 3.5,3.5 0 1,1 80,42 Z"
+        android:fillColor="#FFFFFFFF" />
+    <path
+        android:pathData="M 104,36 A 3,3 0 1,1 104,36 Z"
+        android:fillColor="#FFFFFFFF" />
+</vector>

@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="128dp"
+    android:height="128dp"
+    android:viewportWidth="128"
+    android:viewportHeight="128">
+
+    <!-- Engine Thruster Flame Glow -->
+    <path
+        android:pathData="M 52,100 L 64,124 L 76,100 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="64"
+                android:startY="100"
+                android:endX="64"
+                android:endY="124"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FF00F0FF" />
+                <item android:offset="0.5" android:color="#800088FF" />
+                <item android:offset="1.0" android:color="#00002288" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Main Delta Wings (Dark Gunmetal Alloy) -->
+    <path
+        android:pathData="M 64,12 L 118,104 L 84,92 L 64,102 L 44,92 L 10,104 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="10"
+                android:startY="12"
+                android:endX="118"
+                android:endY="104"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FF4A5568" />
+                <item android:offset="0.5" android:color="#FF2D3748" />
+                <item android:offset="1.0" android:color="#FF1A202C" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Wing Panel Highlights & Mold Lines -->
+    <path
+        android:pathData="M 64,24 L 110,98 L 82,88 Z"
+        android:fillColor="#15FFFFFF" />
+    <path
+        android:pathData="M 64,24 L 18,98 L 46,88 Z"
+        android:fillColor="#0AFFFFFF" />
+
+    <!-- Center Fuselage Spine -->
+    <path
+        android:pathData="M 64,16 L 78,82 L 64,96 L 50,82 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="50"
+                android:startY="16"
+                android:endX="78"
+                android:endY="96"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FF718096" />
+                <item android:offset="1.0" android:color="#FF2D3748" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Armored Cockpit Canopy (Glass Visor with Cyan Reflection) -->
+    <path
+        android:pathData="M 64,32 L 72,62 L 64,74 L 56,62 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="56"
+                android:startY="32"
+                android:endX="72"
+                android:endY="74"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FFE2E8F0" />
+                <item android:offset="0.3" android:color="#FF38BDF8" />
+                <item android:offset="1.0" android:color="#FF0369A1" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Wingtip Heavy Cannon Barrels -->
+    <path
+        android:pathData="M 12,80 L 16,80 L 16,108 L 12,108 Z"
+        android:fillColor="#FF1E293B" />
+    <path
+        android:pathData="M 112,80 L 116,80 L 116,108 L 112,108 Z"
+        android:fillColor="#FF1E293B" />
+
+    <!-- Cannon Muzzle Emission Nodes -->
+    <path
+        android:pathData="M 11,76 L 17,76 L 17,80 L 11,80 Z"
+        android:fillColor="#FF38BDF8" />
+    <path
+        android:pathData="M 111,76 L 117,76 L 117,80 L 111,80 Z"
+        android:fillColor="#FF38BDF8" />
+
+    <!-- Tactical Navigation Lights -->
+    <path
+        android:pathData="M 8,102 A 3,3 0 1,1 14,102 A 3,3 0 1,1 8,102 Z"
+        android:fillColor="#EF4444" />
+    <path
+        android:pathData="M 114,102 A 3,3 0 1,1 120,102 A 3,3 0 1,1 114,102 Z"
+        android:fillColor="#22C55E" />
+</vector>

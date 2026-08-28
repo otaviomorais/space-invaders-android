@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="192dp"
+    android:height="192dp"
+    android:viewportWidth="256"
+    android:viewportHeight="256">
+
+    <!-- Heavy Fortress Armor Superstructure (Dark Steel Alloy) -->
+    <path
+        android:pathData="M 128,240 L 240,128 L 224,40 L 176,16 L 80,16 L 32,40 L 16,128 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="16"
+                android:startY="16"
+                android:endX="240"
+                android:endY="240"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FF334155" />
+                <item android:offset="0.5" android:color="#FF1E293B" />
+                <item android:offset="1.0" android:color="#FF0F172A" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Armor Plate Segments & Panel Highlights -->
+    <path
+        android:pathData="M 128,220 L 224,120 L 208,48 L 168,28 L 88,28 L 48,48 L 32,120 Z"
+        android:fillColor="#15FFFFFF" />
+
+    <!-- Side Heavy Plasma Battery Turret Pods -->
+    <path
+        android:pathData="M 16,100 L 40,100 L 48,150 L 8,150 Z"
+        android:fillColor="#FFDC2626" />
+    <path
+        android:pathData="M 240,100 L 216,100 L 208,150 L 248,150 Z"
+        android:fillColor="#FFDC2626" />
+
+    <!-- Central Vulnerable Energy Core Chamber (Glowing Plasma Reactor) -->
+    <path
+        android:pathData="M 128,80 A 36,36 0 1,1 128,152 A 36,36 0 1,1 128,80 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="92"
+                android:startY="80"
+                android:endX="164"
+                android:endY="152"
+                android:type="radial"
+                android:gradientRadius="36">
+                <item android:offset="0.0" android:color="#FFFFF1F2" />
+                <item android:offset="0.4" android:color="#FFF43F5E" />
+                <item android:offset="0.8" android:color="#FFE11D48" />
+                <item android:offset="1.0" android:color="#FF881337" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Reactor Containment Ring -->
+    <path
+        android:pathData="M 128,72 A 44,44 0 1,1 128,160 A 44,44 0 1,1 128,72 Z"
+        android:strokeWidth="6"
+        android:strokeColor="#FFFB7185"
+        android:fillColor="#00000000" />
+
+    <!-- Main Propulsion Exhaust Thruster Nozzles -->
+    <path
+        android:pathData="M 96,24 L 112,24 L 108,4 L 100,4 Z"
+        android:fillColor="#FF38BDF8" />
+    <path
+        android:pathData="M 144,24 L 160,24 L 156,4 L 148,4 Z"
+        android:fillColor="#FF38BDF8" />
+</vector>

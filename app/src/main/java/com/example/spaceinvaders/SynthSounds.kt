@@ -23,7 +23,7 @@ class SynthSounds(context: Context) {
     private val appContext = context.applicationContext
     private val dir: java.io.File
     private val pool: SoundPool
-    private val ids: MutableMap<Sfx, Int> = HashMap()
+    private val ids: MutableMap<Sfx, Int> = java.util.concurrent.ConcurrentHashMap()
 
     @Volatile private var musicStreamId = 0
     @Volatile private var musicStarted = false
@@ -44,7 +44,13 @@ class SynthSounds(context: Context) {
             @Suppress("DEPRECATION")
             SoundPool(16, AudioManager.STREAM_MUSIC, 0)
         }
-        loadSamples()
+        Thread({
+            loadSamples()
+            musicFile()
+        }, "SynthSounds-Init").apply {
+            isDaemon = true
+            start()
+        }
     }
 
     // ---------- Sample synthesis ----------
@@ -190,16 +196,22 @@ class SynthSounds(context: Context) {
     fun startMusic() {
         if (muted) return
         if (musicStarted) return
-        val file = musicFile()
-        val sampleId = pool.load(file.absolutePath, 1)
         musicStarted = true
-        pool.setOnLoadCompleteListener { _, sid, _ ->
-            if (sid == sampleId && musicStarted) {
-                try {
-                    // pool.play returns a stream id; keep it to stop later.
-                    musicStreamId = pool.play(sampleId, 0.25f, 0.25f, 1, -1, 1f)
-                } catch (_: Exception) {}
+        Thread({
+            val file = musicFile()
+            if (!musicStarted) return@Thread
+            val sampleId = pool.load(file.absolutePath, 1)
+            pool.setOnLoadCompleteListener { _, sid, _ ->
+                if (sid == sampleId && musicStarted) {
+                    try {
+                        // pool.play returns a stream id; keep it to stop later.
+                        musicStreamId = pool.play(sampleId, 0.25f, 0.25f, 1, -1, 1f)
+                    } catch (_: Exception) {}
+                }
             }
+        }, "SynthSounds-Music").apply {
+            isDaemon = true
+            start()
         }
     }
 

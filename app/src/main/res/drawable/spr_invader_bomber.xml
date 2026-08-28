@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="128dp"
+    android:height="128dp"
+    android:viewportWidth="128"
+    android:viewportHeight="128">
+
+    <!-- Heavy Bomber Hull (Dark Crimson Iron) -->
+    <path
+        android:pathData="M 20,20 L 108,20 L 120,68 L 100,108 L 28,108 L 8,68 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="8"
+                android:startY="20"
+                android:endX="120"
+                android:endY="108"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FF991B1B" />
+                <item android:offset="0.5" android:color="#FF7F1D1D" />
+                <item android:offset="1.0" android:color="#FF450A0A" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Armored Plating Ridges -->
+    <path
+        android:pathData="M 28,28 L 100,28 L 110,64 L 92,98 L 36,98 L 18,64 Z"
+        android:fillColor="#15FFFFFF" />
+
+    <!-- Ordnance Missile Bay Port (Glowing Orange Heat Vent) -->
+    <path
+        android:pathData="M 44,48 L 84,48 L 88,80 L 40,80 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="40"
+                android:startY="48"
+                android:endX="88"
+                android:endY="80"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FFF97316" />
+                <item android:offset="1.0" android:color="#FF7C2D12" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Side Thruster Ports -->
+    <path
+        android:pathData="M 12,32 L 20,32 L 20,56 L 12,56 Z"
+        android:fillColor="#FFEA580C" />
+    <path
+        android:pathData="M 108,32 L 116,32 L 116,56 L 108,56 Z"
+        android:fillColor="#FFEA580C" />
+</vector>

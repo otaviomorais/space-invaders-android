@@ -14,6 +14,12 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.attributes.layoutInDisplayCutoutMode =
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
+
         gameView = GameView(this)
         setContentView(gameView)
         enterImmersive()
@@ -56,10 +62,11 @@ class MainActivity : Activity() {
         }
     }
 
+    @Suppress("DEPRECATION", "NewApi")
     private fun enterImmersiveApi30() {
         window.setDecorFitsSystemWindows(false)
         window.insetsController?.let { controller ->
-            controller.hide(WindowInsets.Type.systemBars())
+            controller.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
             controller.systemBarsBehavior =
                 WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }

@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="128dp"
+    android:height="128dp"
+    android:viewportWidth="128"
+    android:viewportHeight="128">
+
+    <!-- Heavy Barrier Shield Front Plate (Cobalt Blue Titanium) -->
+    <path
+        android:pathData="M 12,16 L 116,16 L 124,56 L 104,112 L 24,112 L 4,56 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="4"
+                android:startY="16"
+                android:endX="124"
+                android:endY="112"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FF1E40AF" />
+                <item android:offset="0.5" android:color="#FF1E3A8A" />
+                <item android:offset="1.0" android:color="#FF172554" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Glowing Barrier Emitter Visor -->
+    <path
+        android:pathData="M 24,36 L 104,36 L 96,60 L 32,60 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="24"
+                android:startY="36"
+                android:endX="104"
+                android:endY="60"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FF60A5FA" />
+                <item android:offset="0.5" android:color="#FF3B82F6" />
+                <item android:offset="1.0" android:color="#FF1D4ED8" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Side Fortification Stabilizers -->
+    <path
+        android:pathData="M 8,64 L 20,64 L 16,96 L 4,96 Z"
+        android:fillColor="#FF2563EB" />
+    <path
+        android:pathData="M 108,64 L 120,64 L 124,96 L 112,96 Z"
+        android:fillColor="#FF2563EB" />
+</vector>

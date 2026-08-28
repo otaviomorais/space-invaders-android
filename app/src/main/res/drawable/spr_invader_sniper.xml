@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="128dp"
+    android:height="128dp"
+    android:viewportWidth="128"
+    android:viewportHeight="128">
+
+    <!-- Precision Needle Hull (Dark Emerald) -->
+    <path
+        android:pathData="M 64,124 L 88,40 L 76,8 L 52,8 L 40,40 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="40"
+                android:startY="8"
+                android:endX="88"
+                android:endY="124"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FF065F46" />
+                <item android:offset="0.5" android:color="#FF047857" />
+                <item android:offset="1.0" android:color="#FF022C22" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Side Stabilizing Vanes -->
+    <path
+        android:pathData="M 40,40 L 12,24 L 28,68 Z"
+        android:fillColor="#FF10B981" />
+    <path
+        android:pathData="M 88,40 L 116,24 L 100,68 Z"
+        android:fillColor="#FF10B981" />
+
+    <!-- Central Precision Targeting Optic Lens (Glowing Green Focal Point) -->
+    <path
+        android:pathData="M 64,48 A 12,12 0 1,1 64,72 A 12,12 0 1,1 64,48 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="52"
+                android:startY="48"
+                android:endX="76"
+                android:endY="72"
+                android:type="radial"
+                android:gradientRadius="12">
+                <item android:offset="0.0" android:color="#FFACFCD9" />
+                <item android:offset="0.5" android:color="#FF34D399" />
+                <item android:offset="1.0" android:color="#FF064E3B" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Focal Beam Emitter Barrel Tip -->
+    <path
+        android:pathData="M 60,116 L 68,116 L 66,128 L 62,128 Z"
+        android:fillColor="#FF6EE7B7" />
+</vector>

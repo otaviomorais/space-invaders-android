@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="128dp"
+    android:height="128dp"
+    android:viewportWidth="128"
+    android:viewportHeight="128">
+
+    <!-- Stealth Hunter Wings (Dark Purple Armor) -->
+    <path
+        android:pathData="M 64,116 L 120,32 L 88,40 L 64,20 L 40,40 L 8,32 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="8"
+                android:startY="20"
+                android:endX="120"
+                android:endY="116"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FF581C87" />
+                <item android:offset="0.5" android:color="#FF3B0764" />
+                <item android:offset="1.0" android:color="#FF1E0236" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Hull Edges & Vents -->
+    <path
+        android:pathData="M 64,110 L 112,36 L 86,44 L 64,28 Z"
+        android:fillColor="#20FFFFFF" />
+
+    <!-- Dual Plasma Pod Mandibles -->
+    <path
+        android:pathData="M 28,24 L 36,24 L 32,8 L 24,8 Z"
+        android:fillColor="#FFA855F7" />
+    <path
+        android:pathData="M 92,24 L 100,24 L 104,8 L 96,8 Z"
+        android:fillColor="#FFA855F7" />
+
+    <!-- Central Optic Core (Glowing Cybernetic Sensor) -->
+    <path
+        android:pathData="M 64,48 A 16,16 0 1,1 64,80 A 16,16 0 1,1 64,48 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="48"
+                android:startY="48"
+                android:endX="80"
+                android:endY="80"
+                android:type="radial"
+                android:gradientRadius="16">
+                <item android:offset="0.0" android:color="#FFFF007F" />
+                <item android:offset="0.6" android:color="#FFC026D3" />
+                <item android:offset="1.0" android:color="#FF4C0519" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Ocular Lens Pupil -->
+    <path
+        android:pathData="M 64,58 A 6,6 0 1,1 64,70 A 6,6 0 1,1 64,58 Z"
+        android:fillColor="#FFFFF0FF" />
+</vector>
