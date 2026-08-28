@@ -94,7 +94,7 @@ class BalanceTest {
     }
 
     @Test
-    fun invaderBulletSpeed_respeitaO tetoDe900() {
+    fun invaderBulletSpeed_respeitaOTetoDe900() {
         assertEqualsFloat(900f, Balance.invaderBulletSpeed(1000), "teto")
         assertEqualsFloat(900f, Balance.invaderBulletSpeed(50), "acima do teto")
     }
