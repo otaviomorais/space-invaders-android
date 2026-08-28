@@ -45,7 +45,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     // Game state
     private var state = State.MENU
     private var score = 0
-    private var lives = 3
+    private var lives = Balance.STARTING_LIVES
     private var wave = 1
     private var highScore = 0
     private var shake = 0f
@@ -79,7 +79,6 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private val invaders = mutableListOf<Invader>()
     private val particles = mutableListOf<Particle>()
     private val stars = mutableListOf<Star>()
-    private val PARTICLE_CAP = 600
     private var ufo: Ufo? = null
     private var ufoTimer = 9f
     private var invaderFireTimer = 1.8f
@@ -111,8 +110,12 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     @Volatile private var uiMineRequested = false
     @Volatile private var uiMuteRequested = false
 
-    // Shader cache: gradients built once, repositioned per draw via local matrix
+    // Shader cache: gradients built once, repositioned per draw via local matrix.
+    // A limpeza acontece na game thread: SurfaceHolder.Callback chega na UI thread,
+    // enquanto getOrPut roda no loop de jogo. Sem a flag, clearShaderCache() na UI
+    // concorre com a leitura e pode lançar ConcurrentModificationException no draw.
     private val shaderCache = HashMap<Long, Shader>()
+    @Volatile private var shaderCacheClearRequested = false
     private val localMatrix = Matrix()
     private val addPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
@@ -231,7 +234,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
     // Armas secundarias
     private var dashCooldown = 0f
-    private var mineCount = 1
+    private var mineCount = Balance.MINE_DEFAULT_COUNT
     private var mineTimer = 0f
     private val mines = mutableListOf<Mine>()
 
@@ -467,8 +470,15 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         } catch (_: Exception) {}
     }
 
-    /** Frees hardware resources; call from the Activity in onDestroy. */
+    /**
+     * Frees hardware resources; call from the Activity in onDestroy.
+     *
+     * Chamada de pause() primeiro para garantir que a thread de jogo morreu antes
+     * de synth virar null: onDestroy pode chegar sem onPause previo, e deixar o
+     * loop vivo tocando um objeto liberado e' a origem classica de crash ao fechar.
+     */
     fun release() {
+        pause()
         try {
             synth?.release()
         } catch (_: Exception) {}
@@ -521,6 +531,14 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             val now = System.nanoTime()
             val dt = min((now - lastTime) / 1_000_000_000f, 0.05f)
             lastTime = now
+
+            // Limpeza da cache de shaders pedida pela thread de UI (surfaceDestroyed).
+            // Fica fora da guarda surfaceReady: ao destruir a superficie surfaceReady
+            // ja e' false e o bloco abaixo nao executa mais.
+            if (shaderCacheClearRequested) {
+                shaderCacheClearRequested = false
+                clearShaderCache()
+            }
 
             if (surfaceReady && w > 0) {
                 // Consume UI-thread requests safely on the game thread
@@ -579,10 +597,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                 if (uiDashRequested) {
                     uiDashRequested = false
                     if (state == State.PLAYING && dashCooldown <= 0f) {
-                        dashCooldown = 2.5f
-                        invincible = 0.6f
+                        dashCooldown = Balance.DASH_COOLDOWN
+                        invincible = Balance.DASH_INVINCIBLE
                         val dir = if (playerX < w / 2f) 1f else -1f
-                        playerX = (playerX + dir * 180f * scale).coerceIn(playerW, w - playerW)
+                        playerX = (playerX + dir * Balance.DASH_DISTANCE * scale).coerceIn(playerW, w - playerW)
                         targetX = playerX
                         shake = maxOf(shake, 8f)
                         triggerVibration(true)
@@ -694,7 +712,9 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         surfaceReady = false
-        clearShaderCache()
+        // Deferida para a game thread: chamadas de SurfaceHolder.Callback rodam na
+        // thread de UI e nao podem limpar o mapa durante um draw em andamento.
+        shaderCacheClearRequested = true
     }
 
     // ---------- Setup ----------
@@ -932,19 +952,19 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         damageTakenThisWave = false
 
         // Sector changes every 3 waves
-        val sectorIndex = ((wave - 1) / 3).coerceAtMost(sectors.lastIndex)
+        val sectorIndex = ((wave - 1) / Balance.WAVES_PER_SECTOR).coerceAtMost(sectors.lastIndex)
         if (bgW != 0f) setSector(sectorIndex)
         sectorBannerTimer = 2f
         flashAlpha = maxOf(flashAlpha, 0.2f)
 
-        // Horda infinita após wave 12: modificadores aleatórios
-        if (wave > 12) {
+        // Horda infinita apos a wave Balance.HORDE_STARTS_AT_WAVE: modificadores aleatorios
+        if (wave > Balance.HORDE_STARTS_AT_WAVE) {
             hordeModifier = Random.nextInt(1, 4) // 1=gravidade baixa 2=névoa 3=enxame
             waveBannerTimer = 2.2f
             val modName = when (hordeModifier) { 1 -> "GRAVIDADE BAIXA"; 2 -> "NÉVOA"; else -> "ENXAME" }
             addFloat("MODO HORDA: $modName", w / 2f, h * 0.35f, Color.rgb(255, 80, 80))
             // Boss continua a cada 4 waves mesmo na horda, mas com modificador mantido
-            if (wave % 4 == 0) {
+            if (wave % Balance.WAVES_PER_BOSS == 0) {
                 bossWave = true
                 entering = false
                 val bossType = if (sectorIndex == 3) 3 else sectorIndex % 3
@@ -963,7 +983,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         } else {
             hordeModifier = 0
             // Every 4th wave: MOTHERSHIP BOSS
-            if (wave % 4 == 0) {
+            if (wave % Balance.WAVES_PER_BOSS == 0) {
                 bossWave = true
                 entering = false
                 val bossType = if (sectorIndex == 3) 3 else sectorIndex % 3
@@ -1059,7 +1079,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
     private fun resetGame() {
         score = 0
-        lives = 3
+        lives = Balance.STARTING_LIVES
         wave = 1
         bullets.clear()
         enemyBullets.clear()
@@ -1440,7 +1460,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             wave++
             addScore(100)
             // recarrega mina a cada onda
-            mineCount = 1
+            mineCount = Balance.MINE_DEFAULT_COUNT
             mineTimer = 0f
             spawnWave()
         }
@@ -1448,7 +1468,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
     /** Fires a projectile from the shooter towards the player's current position. */
     private fun fireAimed(shooter: Invader) {
-        val speed = ((500f + wave * 18f).coerceAtMost(900f)) * scale
+        val speed = Balance.invaderBulletSpeed(wave) * scale
         val travelTime = (shooter.y - playerY) / speed
         var vx = if (travelTime > 0f) (playerX - shooter.x) / travelTime * 0.65f else 0f
         vx = vx.coerceIn(-240f * scale, 240f * scale)
@@ -1898,7 +1918,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                 invaders.add(mini)
             }
         }
-        if (Random.nextFloat() < 0.14f) {
+        if (Random.nextFloat() < Balance.POWERUP_DROP_CHANCE) {
             powerUps.add(PowerUp(inv.x, inv.y, rollPowerType()))
         }
     }
@@ -2042,7 +2062,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         }
         when (weapon) {
             Weapon.PLASMA -> {
-                fireCooldown = (if (rapid) 0.07f else 0.18f) - cannonUp * 0.03f
+                fireCooldown = Balance.fireCooldown(weapon.ordinal, cannonUp, rapid)
                 val angles = when (wingExtra) {
                     2 -> floatArrayOf(-0.22f, 0f, 0.22f)
                     1 -> floatArrayOf(-0.13f, 0.13f)
@@ -2054,14 +2074,14 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                 }
             }
             Weapon.SPREAD -> {
-                fireCooldown = (if (rapid) 0.16f else 0.26f) - cannonUp * 0.02f
+                fireCooldown = Balance.fireCooldown(weapon.ordinal, cannonUp, rapid)
                 for (a in floatArrayOf(-0.5f, -0.25f, 0f, 0.25f, 0.5f)) {
                     bullets.add(Bullet(playerX, playerY - playerW, spd * 0.95f * cos(a).coerceAtLeast(0.55f),
                         Color.rgb(255, 230, 130), sin(a) * spd))
                 }
             }
             Weapon.LASER -> {
-                fireCooldown = (if (rapid) 0.2f else 0.3f) - cannonUp * 0.02f
+                fireCooldown = Balance.fireCooldown(weapon.ordinal, cannonUp, rapid)
                 bullets.add(Bullet(playerX, playerY - playerW, 1650f * scale,
                     Color.rgb(200, 240, 255), 0f, pierce = true))
                 if (wingExtra >= 1) {
@@ -2072,7 +2092,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                 }
             }
             Weapon.MISSILE -> {
-                fireCooldown = (if (rapid) 0.22f else 0.34f) - cannonUp * 0.02f
+                fireCooldown = Balance.fireCooldown(weapon.ordinal, cannonUp, rapid)
                 val n = 1 + wingExtra
                 for (i in 0 until n) {
                     val off = (i - (n - 1) / 2f) * playerW * 0.5f
@@ -2163,11 +2183,11 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         playSound(SynthSounds.Sfx.POWERUP)
         when (type) {
             PowerType.RAPID -> {
-                rapidTimer = 8f
+                rapidTimer = Balance.RAPID_DURATION
                 addFloat("TIRO RÁPIDO!", playerX, playerY - 70 * scale, powerColor(type))
             }
             PowerType.TRIPLE -> {
-                tripleTimer = 8f
+                tripleTimer = Balance.TRIPLE_DURATION
                 addFloat("TIRO TRIPLO!", playerX, playerY - 70 * scale, powerColor(type))
             }
             PowerType.SHIELD -> {
@@ -2175,7 +2195,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                 addFloat("ESCUDO!", playerX, playerY - 70 * scale, powerColor(type))
             }
             PowerType.LIFE -> {
-                lives = (lives + 1).coerceAtMost(5)
+                lives = (lives + 1).coerceAtMost(Balance.MAX_LIVES)
                 flashAlpha = maxOf(flashAlpha, 0.22f)
                 addFloat("+1 VIDA", playerX, playerY - 70 * scale, powerColor(type))
             }
@@ -2318,7 +2338,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     // ---------- Particles ----------
 
     private fun addParticle(p: Particle) {
-        if (particles.size >= PARTICLE_CAP) {
+        if (particles.size >= Balance.PARTICLE_CAP) {
             // Evict the oldest transient particle; keep structured rings/flash intact
             val idx = particles.indexOfFirst {
                 it.kind == Particle.KIND_SPARK || it.kind == Particle.KIND_SMOKE || it.kind == Particle.KIND_EMBER
@@ -4057,7 +4077,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
         // Sector banner
         if (sectorBannerTimer > 0f) {
-            val sectorIndex = ((wave - 1) / 3).coerceAtMost(sectors.lastIndex)
+            val sectorIndex = ((wave - 1) / Balance.WAVES_PER_SECTOR).coerceAtMost(sectors.lastIndex)
             val a = (sectorBannerTimer / 2f).coerceIn(0f, 1f)
             bigTextPaint.alpha = (a * 255).toInt()
             bigTextPaint.textSize = 60f * scale
