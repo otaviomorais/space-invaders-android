@@ -1,9 +1,48 @@
-.gradle/
+```kotlin
+# Kotlin/Android specific
+*.class
+*.dex
+*.jar
+*.war
+*.aar
+
+# Android build artifacts
 build/
-local.properties
+.gradle/
+captures/
+
+# IDE files
 .idea/
 *.iml
-captures/
-.externalNativeBuild/
-.cxx/
-*.class
+*.ipr
+*.iws
+.vscode/
+
+# Compiled Python files (if any Python in project)
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+
+# Logs
+*.log
+*.out
+
+# Environment
+.env
+.env.local
+.env.*
+
+# Dependencies
+node_modules/
+venv/
+.venv/
+.libs/
+lib/
+dist/
+target/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+```

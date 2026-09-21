@@ -808,15 +808,17 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private fun initStars() {
         stars.clear()
         repeat(140) {
+            val z = Random.nextFloat() * 0.6f + 0.4f
             stars.add(
                 Star(
-                    Random.nextFloat() * w,
-                    Random.nextFloat() * h,
-                    Random.nextFloat() * 2.2f + 0.6f,
-                    Random.nextFloat() * 46f + 14f,
-                    (Random.nextFloat() * 130 + 80).toInt(),
-                    Random.nextFloat() * 6.28f,
-                    Random.nextFloat() * 0.6f + 0.4f
+                    x = Random.nextFloat() * w,
+                    y = Random.nextFloat() * h,
+                    radius = Random.nextFloat() * 2.2f + 0.6f,
+                    speed = Random.nextFloat() * 46f + 14f,
+                    alpha = (Random.nextFloat() * 130 + 80).toInt(),
+                    seed = Random.nextFloat() * 6.28f,
+                    z = z,
+                    parallaxFactor = z * 1.5f  // deeper stars move less for parallax effect
                 )
             )
         }
@@ -1510,10 +1512,15 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private fun updateStars(dt: Float) {
         for (s in stars) {
             s.y += s.speed * scale * dt * s.z * (if (state == GameState.GAME_OVER) 0.2f else 1f)
+            // Apply parallax scrolling based on camera movement and star depth
+            s.x -= camX * 0.15f * s.parallaxFactor * dt
+            // Wrap around screen edges
             if (s.y > h) {
                 s.y = 0f
                 s.x = Random.nextFloat() * w
             }
+            if (s.x < 0f) s.x = w
+            if (s.x > w) s.x = 0f
         }
     }
 
@@ -1529,6 +1536,11 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             for (inv in invaders) {
                 if (!inv.alive) continue
                 inv.pulse += dt * 6f
+                // 2.5D: depth oscillation during entry creates pseudo-3D effect
+                inv.depth += inv.depthSpeed * sdt
+                inv.depth = inv.depth.coerceIn(-0.4f, 0.4f)
+                inv.rotY = sin(inv.pulse * 0.7f) * 8f * inv.depth  // slight yaw based on depth
+                inv.scaleBoost = 1f + inv.depth * 0.15f  // closer enemies appear larger
                 val tx = inv.homeX + formOffX
                 inv.x += (tx - inv.x) * min(5f * dt, 1f)
                 inv.y += (inv.homeY - inv.y) * min(5f * dt, 1f)
@@ -1559,6 +1571,13 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             for (inv in invaders) {
                 if (!inv.alive || inv.diving) continue
                 inv.pulse += dt * 6f
+                // 2.5D: subtle depth-based movement and rotation for pseudo-3D effect
+                inv.depth += inv.depthSpeed * sdt * 0.3f
+                inv.depth = inv.depth.coerceIn(-0.4f, 0.4f)
+                inv.scaleBoost = 1f + inv.depth * 0.15f
+                inv.rotX = sin(inv.pulse * 0.5f + inv.depth) * 5f * inv.depth  // pitch oscillation
+                inv.rotY = cos(inv.pulse * 0.3f) * 6f * inv.depth  // yaw oscillation
+                
                 inv.x = inv.homeX + formOffX
                 inv.homeY += descendRate * sdt
                 inv.y = inv.homeY
@@ -1585,11 +1604,18 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
             if (maxY > playerY - 100 * scale) hitPlayer(instantDeath = true)
 
-            // Divers: S-curve dive towards the player
+            // Divers: S-curve dive towards the player with 2.5D depth effect
             for (inv in invaders) {
                 if (!inv.alive || !inv.diving) continue
                 inv.pulse += dt * 12f
                 inv.divePhase += sdt * 5f
+                // 2.5D: depth affects dive trajectory and rotation
+                inv.depth += inv.depthSpeed * sdt * 0.5f
+                inv.depth = inv.depth.coerceIn(-0.3f, 0.3f)
+                inv.scaleBoost = 1f + inv.depth * 0.12f
+                inv.rotX = sin(inv.divePhase * 1.5f) * 12f * inv.depth  // pitch during dive
+                inv.rotY = cos(inv.divePhase) * 10f * inv.depth  // yaw during dive
+                
                 inv.y += (330f + wave * 22f) * scale * sdt
                 inv.x += sin(inv.divePhase) * 170f * scale * sdt
                 inv.x += kotlin.math.sign(playerX - inv.x) * 70f * scale * sdt
@@ -2777,11 +2803,16 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private fun drawStars(canvas: Canvas) {
         fillPaint.style = Paint.Style.FILL
         setShadow(null)
-        for (s in stars) {
+        // Sort stars by depth for proper parallax rendering (back to front)
+        val sortedStars = stars.sortedBy { it.z }
+        for (s in sortedStars) {
             val twk = 0.65f + 0.35f * sin(bgTime * 1.7f + s.seed)
             fillPaint.color = Color.WHITE
             fillPaint.alpha = (s.alpha * twk).toInt()
-            canvas.drawCircle(s.x + camX * 0.3f * s.z, s.y, s.radius * (0.6f + s.z * 0.4f), fillPaint)
+            // Enhanced parallax: use parallaxFactor for depth-based horizontal scrolling
+            val parallaxX = camX * 0.3f * s.parallaxFactor
+            val sizeMult = 0.6f + s.z * 0.4f
+            canvas.drawCircle(s.x + parallaxX, s.y, s.radius * sizeMult, fillPaint)
         }
         fillPaint.alpha = 255
     }
