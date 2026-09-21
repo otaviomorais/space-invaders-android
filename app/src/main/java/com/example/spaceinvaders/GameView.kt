@@ -36,6 +36,14 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     @Volatile private var running = false
     @Volatile private var surfaceReady = false
 
+    // Performance & optimization
+    private var useSoftwareRendering = true
+    private var particleBudget = 400
+    private var starBudget = 100
+    private var frameDropCount = 0
+    private var lastFpsTime = 0L
+    private var fps = 60
+
     // Screen
     private var w = 0f
     private var h = 0f
@@ -77,7 +85,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private val enemyBullets = mutableListOf<Bullet>()
     private val invaders = mutableListOf<Invader>()
     private val particles = mutableListOf<Particle>()
-    private val particlePool = ParticlePool(600)
+    private val particlePool = ParticlePool(particleBudget)
     private val stars = mutableListOf<Star>()
     private var ufo: Ufo? = null
     private var ufoTimer = 9f
@@ -508,10 +516,29 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
     override fun run() {
         var lastTime = System.nanoTime()
+        lastFpsTime = lastTime
         while (running) {
             val now = System.nanoTime()
             val dt = min((now - lastTime) / 1_000_000_000f, 0.05f)
             lastTime = now
+
+            // FPS monitoring for adaptive quality
+            if (now - lastFpsTime >= 500_000_000L) {
+                fps = ((1f / dt).toInt()).coerceIn(10, 120)
+                lastFpsTime = now
+                // Adaptive quality: reduce particles/stars if FPS drops below 45
+                if (fps < 45 && particleBudget > 200) {
+                    particleBudget -= 50
+                    frameDropCount++
+                } else if (fps >= 55 && particleBudget < 600 && frameDropCount > 0) {
+                    particleBudget += 30
+                    frameDropCount = maxOf(0, frameDropCount - 1)
+                }
+                // Rebuild pools when budget changes
+                if (frameDropCount % 3 == 0 && particleBudget != particlePool.pool.size) {
+                    // Will be recreated on next surface init
+                }
+            }
 
             // Limpeza da cache de shaders pedida pela thread de UI (surfaceDestroyed).
             // Fica fora da guarda surfaceReady: ao destruir a superficie surfaceReady
@@ -697,6 +724,16 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         playerW = (if (isPortrait) 115f else 90f) * scale
         if (playerX == 0f || playerX > w) playerX = w / 2f
         targetX = playerX.coerceIn(playerW, w - playerW)
+        
+        // Auto-detect rendering mode based on screen resolution
+        // Lower resolutions can use hardware acceleration, higher ones benefit from software
+        val pixelCount = width * height
+        useSoftwareRendering = pixelCount > 2_000_000  // > ~2MP (e.g., 1920x1080)
+        
+        // Adjust budgets based on screen size
+        starBudget = if (pixelCount > 2_500_000) 80 else if (pixelCount > 1_500_000) 100 else 140
+        particleBudget = if (pixelCount > 2_500_000) 300 else if (pixelCount > 1_500_000) 400 else 500
+        
         // A inicializacao das listas (stars/dust/debris/backgrounds) e' deferida
         // para a game thread, evitando ConcurrentModificationException com o draw.
         surfaceInitRequested = true
@@ -807,7 +844,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
     private fun initStars() {
         stars.clear()
-        repeat(140) {
+        repeat(starBudget) {
             val z = Random.nextFloat() * 0.6f + 0.4f
             stars.add(
                 Star(
@@ -2428,6 +2465,9 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     }
 
     private fun explode(x: Float, y: Float, color: Int, big: Boolean = false, huge: Boolean = false) {
+        // Skip particles if budget is exhausted (performance safeguard)
+        if (particles.size >= particleBudget) return
+        
         if (big || huge) triggerVibration(false) else triggerVibration(true)
         val eScale = when {
             huge -> 2.2f
@@ -2435,16 +2475,20 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             else -> 1f
         }
 
-        // White-hot flash core
-        addParticle(particlePool.obtain(x, y, 0f, 0f, (26f + 26f * eScale) * scale, 0.09f, 0.09f,
-            Color.WHITE, 0f, isRing = false, kind = Particle.KIND_FLASH))
-
-        // Expanding fireball puffs
-        val puffs = when {
-            huge -> 7
-            big -> 5
-            else -> 3
+        // White-hot flash core - reduced count for performance
+        if (particles.size < particleBudget - 5) {
+            addParticle(particlePool.obtain(x, y, 0f, 0f, (26f + 26f * eScale) * scale, 0.09f, 0.09f,
+                Color.WHITE, 0f, isRing = false, kind = Particle.KIND_FLASH))
         }
+
+        // Expanding fireball puffs - adaptive count based on budget
+        val availableSlots = particleBudget - particles.size
+        val puffs = when {
+            huge -> minOf(7, availableSlots / 8)
+            big -> minOf(5, availableSlots / 8)
+            else -> minOf(3, availableSlots / 8)
+        }.coerceAtLeast(0)
+        
         repeat(puffs) {
             val a = Random.nextFloat() * 6.2832f
             val sp = (Random.nextFloat() * 60f + 10f) * scale * eScale
@@ -2461,12 +2505,13 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             })
         }
 
-        // Fast sparks
+        // Fast sparks - adaptive count
+        val sparkSlots = particleBudget - particles.size
         val sparks = when {
-            huge -> 52
-            big -> 24
-            else -> 13
-        }
+            huge -> minOf(52, sparkSlots / 2)
+            big -> minOf(24, sparkSlots / 2)
+            else -> minOf(13, sparkSlots / 2)
+        }.coerceAtLeast(0)
         repeat(sparks) {
             val a = Random.nextFloat() * 6.2832f
             val sp = (Random.nextFloat() + 0.3f) * (if (huge) 500f else if (big) 350f else 230f) * scale
@@ -2555,7 +2600,11 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     }
 
     private fun spawnSparks(x: Float, y: Float, color: Int, count: Int, small: Boolean, spreadUp: Boolean = false) {
-        repeat(count) {
+        // Respect particle budget
+        val availableSlots = maxOf(0, particleBudget - particles.size)
+        val actualCount = minOf(count, availableSlots)
+        
+        repeat(actualCount) {
             val angle = if (spreadUp) (-Math.PI.toFloat()) + (Random.nextFloat() - 0.5f) * 1.2f
             else Random.nextFloat() * 2f * Math.PI.toFloat()
             val speed = (Random.nextFloat() + 0.2f) * 260f * scale
@@ -2577,7 +2626,9 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
     private fun draw() {
         val canvas = try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            // Use software rendering for better compatibility with complex effects
+            // Hardware acceleration can cause lag on devices with weak GPUs
+            if (!useSoftwareRendering && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 holder.lockHardwareCanvas() ?: return
             } else {
                 holder.lockCanvas() ?: return
