@@ -808,15 +808,17 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private fun initStars() {
         stars.clear()
         repeat(140) {
+            val z = Random.nextFloat() * 0.6f + 0.4f
             stars.add(
                 Star(
-                    Random.nextFloat() * w,
-                    Random.nextFloat() * h,
-                    Random.nextFloat() * 2.2f + 0.6f,
-                    Random.nextFloat() * 46f + 14f,
-                    (Random.nextFloat() * 130 + 80).toInt(),
-                    Random.nextFloat() * 6.28f,
-                    Random.nextFloat() * 0.6f + 0.4f
+                    x = Random.nextFloat() * w,
+                    y = Random.nextFloat() * h,
+                    radius = Random.nextFloat() * 2.2f + 0.6f,
+                    speed = Random.nextFloat() * 46f + 14f,
+                    alpha = (Random.nextFloat() * 130 + 80).toInt(),
+                    seed = Random.nextFloat() * 6.28f,
+                    z = z,
+                    parallaxFactor = z * 1.5f  // deeper stars move less
                 )
             )
         }
@@ -1038,6 +1040,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                     10 -> 40f
                     else -> 46f
                 }) * scale
+                val depth = Random.nextFloat() * 0.6f - 0.3f  // -0.3 to 0.3
                 invaders.add(
                     Invader(
                         homeX = marginX + c * spacingX,
@@ -1052,7 +1055,13 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                             4 -> 3
                             10 -> 1
                             else -> if (r == 0 && wave >= 4) 2 else 1
-                        }
+                        },
+                        // 2.5D properties: depth-based positioning and movement
+                        depth = depth,
+                        depthSpeed = Random.nextFloat() * 0.02f - 0.01f,
+                        rotX = 0f,
+                        rotY = 0f,
+                        scaleBoost = 1f + depth * 0.15f  // closer enemies appear larger
                     )
                 )
             }
@@ -1529,6 +1538,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             for (inv in invaders) {
                 if (!inv.alive) continue
                 inv.pulse += dt * 6f
+                // 2.5D: depth oscillation during entry
+                inv.depth += inv.depthSpeed * sdt
+                inv.depth = inv.depth.coerceIn(-0.4f, 0.4f)
+                inv.rotY = sin(inv.pulse * 0.7f) * 8f * inv.depth  // slight rotation based on depth
                 val tx = inv.homeX + formOffX
                 inv.x += (tx - inv.x) * min(5f * dt, 1f)
                 inv.y += (inv.homeY - inv.y) * min(5f * dt, 1f)
@@ -1559,6 +1572,13 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             for (inv in invaders) {
                 if (!inv.alive || inv.diving) continue
                 inv.pulse += dt * 6f
+                // 2.5D: subtle depth-based movement and rotation
+                inv.depth += inv.depthSpeed * sdt * 0.3f
+                inv.depth = inv.depth.coerceIn(-0.4f, 0.4f)
+                inv.scaleBoost = 1f + inv.depth * 0.15f
+                inv.rotX = sin(inv.pulse * 0.5f + inv.depth) * 5f * inv.depth
+                inv.rotY = cos(inv.pulse * 0.3f) * 6f * inv.depth
+                
                 inv.x = inv.homeX + formOffX
                 inv.homeY += descendRate * sdt
                 inv.y = inv.homeY
@@ -1585,11 +1605,18 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
             if (maxY > playerY - 100 * scale) hitPlayer(instantDeath = true)
 
-            // Divers: S-curve dive towards the player
+            // Divers: S-curve dive towards the player with 2.5D depth effect
             for (inv in invaders) {
                 if (!inv.alive || !inv.diving) continue
                 inv.pulse += dt * 12f
                 inv.divePhase += sdt * 5f
+                // 2.5D: depth affects dive trajectory
+                inv.depth += inv.depthSpeed * sdt * 0.5f
+                inv.depth = inv.depth.coerceIn(-0.3f, 0.3f)
+                inv.scaleBoost = 1f + inv.depth * 0.12f
+                inv.rotX = sin(inv.divePhase * 1.5f) * 12f * inv.depth
+                inv.rotY = cos(inv.divePhase) * 10f * inv.depth
+                
                 inv.y += (330f + wave * 22f) * scale * sdt
                 inv.x += sin(inv.divePhase) * 170f * scale * sdt
                 inv.x += kotlin.math.sign(playerX - inv.x) * 70f * scale * sdt
@@ -1735,13 +1762,20 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         }
         for (i in variants.indices) {
             val variant = variants[i]
+            val depth = 0.2f + i * 0.1f  // slight depth variation for escorts
             invaders.add(
                 Invader(
                     homeX = b.x + (i - 1f) * 110f * scale, homeY = b.y + 120f * scale,
                     x = b.x + (i - 1f) * 110f * scale, y = b.y,
                     size = if (variant == 4) 36f * scale else 30f * scale,
                     color = invaderColor(variant), variant = variant,
-                    hp = if (variant == 4) 3 else 1
+                    hp = if (variant == 4) 3 else 1,
+                    // 2.5D properties for boss escorts
+                    depth = depth,
+                    depthSpeed = 0f,
+                    rotX = 0f,
+                    rotY = 0f,
+                    scaleBoost = 1f + depth * 0.1f
                 )
             )
         }
@@ -1954,10 +1988,17 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         // Splitter divides into two mini divers
         if (inv.variant == 5 && !inv.mini) {
             repeat(2) { i ->
+                val miniDepth = inv.depth + (if (i == 0) -0.1f else 0.1f)
                 val mini = Invader(
                     homeX = inv.x + (i * 60 - 30) * scale, homeY = inv.y,
                     x = inv.x + (i * 60 - 30) * scale, y = inv.y,
-                    size = 22f * scale, color = invaderColor(1), variant = 1, hp = 1, mini = true
+                    size = 22f * scale, color = invaderColor(1), variant = 1, hp = 1, mini = true,
+                    // Inherit parent's depth with slight variation
+                    depth = miniDepth,
+                    depthSpeed = inv.depthSpeed * 0.8f,
+                    rotX = 0f,
+                    rotY = 0f,
+                    scaleBoost = 1f + miniDepth * 0.12f
                 )
                 mini.diving = true
                 invaders.add(mini)
@@ -2777,11 +2818,16 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private fun drawStars(canvas: Canvas) {
         fillPaint.style = Paint.Style.FILL
         setShadow(null)
-        for (s in stars) {
+        // Sort stars by depth for proper parallax (back to front)
+        val sortedStars = stars.sortedBy { it.z }
+        for (s in sortedStars) {
             val twk = 0.65f + 0.35f * sin(bgTime * 1.7f + s.seed)
             fillPaint.color = Color.WHITE
             fillPaint.alpha = (s.alpha * twk).toInt()
-            canvas.drawCircle(s.x + camX * 0.3f * s.z, s.y, s.radius * (0.6f + s.z * 0.4f), fillPaint)
+            // Enhanced parallax: use parallaxFactor for depth-based scrolling
+            val parallaxX = camX * 0.3f * s.parallaxFactor
+            val sizeMult = 0.6f + s.z * 0.4f
+            canvas.drawCircle(s.x + parallaxX, s.y, s.radius * sizeMult, fillPaint)
         }
         fillPaint.alpha = 255
     }
@@ -3045,8 +3091,18 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     }
 
     private fun drawCrab(canvas: Canvas, inv: Invader) {
-        val s = inv.size
+        val s = inv.size * inv.scaleBoost  // Apply depth-based scale
         val pulse = 1f + sin(inv.pulse) * 0.06f
+        
+        // 2.5D: Apply rotation transformations
+        canvas.save()
+        canvas.rotate(inv.rotX, inv.x, inv.y)
+        canvas.rotate(inv.rotY, inv.x, inv.y)
+        
+        // Depth-based alpha (distant enemies are slightly dimmer)
+        val depthAlpha = (255 * (0.7f + inv.depth * 0.3f)).toInt().coerceIn(120, 255)
+        fillPaint.alpha = depthAlpha
+        
         drawShadowRect(canvas, inv.x, inv.y, s * pulse, s * 0.5f)
 
         // Angular warship hull - faceted armor plates
@@ -3109,6 +3165,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         fillPaint.color = Color.argb(200, 255, 255, 255)
         canvas.drawCircle(inv.x - s * 0.34f, inv.y - s * 0.16f, s * 0.035f, fillPaint)
         canvas.drawCircle(inv.x + s * 0.26f, inv.y - s * 0.16f, s * 0.035f, fillPaint)
+        
+        // Restore canvas state
+        canvas.restore()
+        fillPaint.alpha = 255  // Reset alpha
     }
 
     private fun drawSquid(canvas: Canvas, inv: Invader) {

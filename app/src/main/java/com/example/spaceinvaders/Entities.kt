@@ -63,7 +63,13 @@ internal class Invader(
     var diving: Boolean = false,
     var divePhase: Float = 0f,
     var mini: Boolean = false,
-    var wraps: Int = 0
+    var wraps: Int = 0,
+    // 2.5D depth properties
+    var depth: Float = 0f,        // -1 (far) to 1 (close)
+    var depthSpeed: Float = 0f,   // rate of depth change
+    var rotX: Float = 0f,         // rotation around X axis (pitch)
+    var rotY: Float = 0f,         // rotation around Y axis (yaw)
+    var scaleBoost: Float = 1f    // additional scale for depth effect
 )
 
 internal class Ufo(var x: Float, val y: Float, val vx: Float) {
@@ -141,7 +147,9 @@ internal class Star(
     val speed: Float,
     val alpha: Int,
     val seed: Float,
-    val z: Float
+    val z: Float,
+    // 2.5D parallax properties
+    var parallaxFactor: Float = 1f  // multiplier for parallax scrolling
 )
 
 internal class Debris(
