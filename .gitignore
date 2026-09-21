@@ -1,51 +1,48 @@
-```
-# Compiled and build artifacts
+```kotlin
+# Kotlin/Android specific
 *.class
-*.o
-*.obj
-*.so
-*.a
-*.dll
-*.exe
-*.out
+*.dex
+*.jar
+*.war
+*.aar
 
-# Dependencies
-.gradle/
+# Android build artifacts
 build/
-target/
+.gradle/
+captures/
 
-# Logs and temp files
+# IDE files
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+
+# Compiled Python files (if any Python in project)
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+
+# Logs
 *.log
-*.tmp
-*.swp
+*.out
 
 # Environment
 .env
 .env.local
-*.env.*
+.env.*
 
-# Editors
-.vscode/
-.idea/
-*.swp
-*.swo
+# Dependencies
+node_modules/
+venv/
+.venv/
+.libs/
+lib/
+dist/
+target/
 
-# System files
+# OS generated files
 .DS_Store
 Thumbs.db
-
-# Coverage reports
-coverage/
-htmlcov/
-.coverage
-
-# Python specific
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-*.so
-.pytest_cache/
-.mypy_cache/
 ```
